@@ -5,5 +5,7 @@ description = "Add your description here"
 requires-python = ">=3.11"
 dependencies = [
     "customtkinter>=5.2.2",
-    "vedo>=2026.6.1",
+    "pillow>=12.2.0",
+    "py3dmol>=2.5.5",
+    "pywebview>=6.2.1",
 ]
