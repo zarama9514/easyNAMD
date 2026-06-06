@@ -1,57 +1,58 @@
 # easyNAMD
 
-GUI для подготовки молекулярно-динамических систем в VMD с последующим моделированием в NAMD.
+GUI for preparing molecular dynamics systems in VMD for subsequent simulation in NAMD.
 
-> Early development. Do not use for commercial purposes without the author's permission.
+A Python tool designed to simplify work with VMD/NAMD. Its main features include preparing data for creating .psf/.pdb files and generating configuration files.
+This tool is in the early stages of development. Please do not use this product for commercial purposes without the author's personal permission.
 
-## Что умеет (сейчас)
+## Current features
 
-Пошаговая сборка системы через вкладки:
+Step-by-step system assembly via tabs:
 
-1. **Build PSF** — сборка PSF/PDB из локального `.pdb` файла через `psfgen`
-2. **Solvate** — гидратация в TIP3P водный бокс с заданным отступом
-3. **Ionize** — нейтрализация системы, опционально с заданной концентрацией соли (NaCl)
+1. **Build PSF** — build PSF/PDB from a local `.pdb` file using `psfgen`
+2. **Solvate** — hydrate in a TIP3P water box with a given padding
+3. **Ionize** — neutralize the system, optionally with a set salt concentration (NaCl)
 
-Генерирует Tcl-скрипт и запускает VMD headlessly. Лог VMD отображается в реальном времени.
+Generates a Tcl script and runs VMD headlessly. VMD log is streamed in real time.
 
-## Зависимости
+## Dependencies
 
-- [VMD](https://www.ks.uiuc.edu/Research/vmd/) (настраивается при первом запуске)
+- [VMD](https://www.ks.uiuc.edu/Research/vmd/) (configured on first launch)
 - Python 3.12+
 - [uv](https://github.com/astral-sh/uv)
 
-## Запуск
+## Usage
 
 ```bash
 uv run python main.py
 ```
 
-При первом запуске приложение попробует найти VMD автоматически. Путь можно изменить во вкладке **Settings**.
+On first launch the app will attempt to detect VMD automatically. The path can be changed in the **Settings** tab.
 
-## Силовые поля
+## Force fields
 
-Файлы топологий и параметров CHARMM36 лежат в:
+CHARMM36 topology and parameter files are stored in:
 
 ```
-topologies/          # .rtf, .str — белок, вода, липиды, нуклеиновые кислоты
-└── ligands/         # топологии лигандов
+topologies/          # .rtf, .str — protein, water, lipids, nucleic acids
+└── ligands/         # ligand topologies
 
 parameters/          # .prm, .str
-└── ligands/         # параметры лигандов
+└── ligands/         # ligand parameters
 ```
 
-Лигандные файлы (из CGenFF или аналогов) подгружаются через кнопку **Add** на вкладке Build PSF.
+Ligand files (from CGenFF or equivalent) are loaded via the **Add** button on the Build PSF tab.
 
-## Структура проекта
+## Project structure
 
 ```
 main.py
 gui/
-  app.py             # главное окно, вкладки Build / Settings
-  build_panel.py     # пошаговые вкладки сборки системы
+  app.py             # main window, Build / Settings tabs
+  build_panel.py     # step-by-step system assembly tabs
 core/
-  tcl_writer.py      # генерация Tcl-скриптов (psfgen, solvate, autoionize)
-  vmd_runner.py      # запуск VMD через subprocess
+  tcl_writer.py      # Tcl script generation (psfgen, solvate, autoionize)
+  vmd_runner.py      # VMD execution via subprocess
 topologies/
 parameters/
 ```
