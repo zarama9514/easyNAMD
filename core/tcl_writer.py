@@ -1,4 +1,5 @@
 import os
+from core.pdb_parser import Patch
 
 
 # ------------------------------------------------------------------ #
@@ -9,18 +10,28 @@ def tcl_build_psf(
     pdb_file: str,
     topology_files: list[str],
     parameter_files: list[str],
+    patches: list[Patch],
     out_prefix: str,
 ) -> str:
-    """Return a Tcl block that runs psfgen on a plain PDB (no aliases, no patches)."""
+    """Return a Tcl block that runs psfgen on a PDB, applying the given patches."""
     top_lines = "\n".join(f'    topology "{t}"' for t in topology_files)
     param_lines = "\n".join(f'    readparameters "{p}"' for p in parameter_files)
     param_block = f"\n{param_lines}" if param_lines else ""
+
+    patch_lines = []
+    for p in patches:
+        if p.is_two_residue():
+            patch_lines.append(f'    patch {p.name} {p.chain1}:{p.resid1} {p.chain2}:{p.resid2}')
+        else:
+            patch_lines.append(f'    patch {p.name} {p.chain1}:{p.resid1}')
+    patch_block = ("\n" + "\n".join(patch_lines)) if patch_lines else ""
+
     return f"""\
 # --- Build PSF ---
 package require psfgen
 psfgen {{
 {top_lines}{param_block}
-    readpdb "{pdb_file}"
+    readpdb "{pdb_file}"{patch_block}
     writepsf "{out_prefix}.psf"
     writepdb "{out_prefix}.pdb"
 }}
@@ -62,6 +73,7 @@ def write_build_script(
     pdb_file: str,
     topology_files: list[str],
     parameter_files: list[str],
+    patches: list[Patch],
     output_dir: str,
     padding: float,
     ionize: bool,
@@ -79,7 +91,7 @@ def write_build_script(
 
     blocks = [
         "# easyNAMD — auto-generated build script\n",
-        tcl_build_psf(pdb_file, topology_files, parameter_files, psf_prefix),
+        tcl_build_psf(pdb_file, topology_files, parameter_files, patches, psf_prefix),
         tcl_solvate(psf_prefix, solvated_prefix, padding),
     ]
 

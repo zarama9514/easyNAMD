@@ -4,6 +4,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
+from core.pdb_parser import Patch, SSBond, find_disulfide_bonds
 from core.tcl_writer import write_build_script
 from core.vmd_runner import run_vmd
 
@@ -22,12 +23,48 @@ def collect_files(folder: str, extensions: tuple) -> list[str]:
     )
 
 
+class PatchRow(ctk.CTkFrame):
+    """A single row for a user-defined patch: name, chain1, resid1, chain2, resid2."""
+
+    def __init__(self, parent, on_remove):
+        super().__init__(parent)
+
+        self.name_var   = tk.StringVar()
+        self.chain1_var = tk.StringVar()
+        self.resid1_var = tk.StringVar()
+        self.chain2_var = tk.StringVar()
+        self.resid2_var = tk.StringVar()
+
+        ctk.CTkEntry(self, textvariable=self.name_var,   width=80,  placeholder_text="Patch").pack(side="left", padx=2)
+        ctk.CTkEntry(self, textvariable=self.chain1_var, width=50,  placeholder_text="Chain").pack(side="left", padx=2)
+        ctk.CTkEntry(self, textvariable=self.resid1_var, width=60,  placeholder_text="ResID").pack(side="left", padx=2)
+        ctk.CTkLabel(self, text="/").pack(side="left")
+        ctk.CTkEntry(self, textvariable=self.chain2_var, width=50,  placeholder_text="Chain2").pack(side="left", padx=2)
+        ctk.CTkEntry(self, textvariable=self.resid2_var, width=60,  placeholder_text="ResID2").pack(side="left", padx=2)
+        ctk.CTkLabel(self, text="(optional)", text_color="gray").pack(side="left", padx=2)
+        ctk.CTkButton(self, text="✕", width=30, fg_color="transparent",
+                      text_color="red", command=on_remove).pack(side="left", padx=4)
+
+    def to_patch(self) -> Patch | None:
+        name   = self.name_var.get().strip()
+        chain1 = self.chain1_var.get().strip()
+        resid1 = self.resid1_var.get().strip()
+        chain2 = self.chain2_var.get().strip()
+        resid2 = self.resid2_var.get().strip()
+        if not name or not chain1 or not resid1:
+            return None
+        return Patch(name=name, chain1=chain1, resid1=resid1, chain2=chain2, resid2=resid2)
+
+
 class BuildPanel(ctk.CTkFrame):
     def __init__(self, parent, config: dict):
         super().__init__(parent)
         self.config = config
         self.ligand_topology_files: list[str] = []
         self.ligand_parameter_files: list[str] = []
+        self.detected_ss_bonds: list[SSBond] = []
+        self.ss_bond_vars: list[tk.BooleanVar] = []
+        self.patch_rows: list[PatchRow] = []
 
         self._build_ui()
 
@@ -36,9 +73,6 @@ class BuildPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------ #
 
     def _build_ui(self):
-        self.rowconfigure(0, weight=1)
-        self.columnconfigure(0, weight=1)
-
         self.steps = ctk.CTkTabview(self)
         self.steps.pack(fill="both", expand=True)
 
@@ -50,7 +84,6 @@ class BuildPanel(ctk.CTkFrame):
         self._build_solvate_tab(self.steps.tab("2. Solvate"))
         self._build_ionize_tab(self.steps.tab("3. Ionize"))
 
-        # Log and Run shared at the bottom
         bottom = ctk.CTkFrame(self)
         bottom.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         bottom.columnconfigure(0, weight=1)
@@ -88,6 +121,26 @@ class BuildPanel(ctk.CTkFrame):
         self.ligand_param_label = ctk.CTkLabel(parent, text="None", anchor="w")
         self.ligand_param_label.grid(row=row, column=1, padx=5, pady=6, sticky="w")
         ctk.CTkButton(parent, text="Add", width=80, command=self._add_ligand_parameters).grid(row=row, column=2, padx=5, pady=6)
+        row += 1
+
+        # Disulfide bonds
+        ctk.CTkLabel(parent, text="Disulfide bonds:").grid(row=row, column=0, sticky="nw", padx=10, pady=6)
+        self.ss_frame = ctk.CTkFrame(parent)
+        self.ss_frame.grid(row=row, column=1, columnspan=2, sticky="ew", padx=5, pady=6)
+        self.ss_placeholder = ctk.CTkLabel(self.ss_frame, text="Load a PDB file to detect SS bonds", text_color="gray")
+        self.ss_placeholder.pack(anchor="w", padx=6, pady=4)
+        row += 1
+
+        # Custom patches
+        ctk.CTkLabel(parent, text="Patches:").grid(row=row, column=0, sticky="nw", padx=10, pady=6)
+        patch_ctrl = ctk.CTkFrame(parent, fg_color="transparent")
+        patch_ctrl.grid(row=row, column=1, columnspan=2, sticky="ew", padx=5, pady=(6, 0))
+        ctk.CTkLabel(patch_ctrl, text="Patch name   Chain  ResID  /  Chain2  ResID2",
+                     text_color="gray", font=("", 11)).pack(anchor="w", padx=4)
+        self.patches_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self.patches_frame.grid(row=row + 1, column=0, columnspan=3, sticky="ew", padx=10)
+        ctk.CTkButton(parent, text="+ Add patch", width=100, command=self._add_patch_row).grid(
+            row=row + 2, column=0, columnspan=3, pady=4)
 
     # --- Tab 2: Solvate ---
 
@@ -115,6 +168,39 @@ class BuildPanel(ctk.CTkFrame):
         self.salt_entry.grid(row=row, column=1, padx=5, pady=6, sticky="w")
 
     # ------------------------------------------------------------------ #
+    #  Disulfide bond detection                                            #
+    # ------------------------------------------------------------------ #
+
+    def _load_ss_bonds(self, pdb_file: str):
+        self.detected_ss_bonds = find_disulfide_bonds(pdb_file)
+        self.ss_bond_vars.clear()
+
+        for widget in self.ss_frame.winfo_children():
+            widget.destroy()
+
+        if not self.detected_ss_bonds:
+            ctk.CTkLabel(self.ss_frame, text="No disulfide bonds found", text_color="gray").pack(anchor="w", padx=6, pady=4)
+            return
+
+        for bond in self.detected_ss_bonds:
+            var = tk.BooleanVar(value=True)
+            self.ss_bond_vars.append(var)
+            ctk.CTkCheckBox(self.ss_frame, text=str(bond), variable=var).pack(anchor="w", padx=6, pady=2)
+
+    # ------------------------------------------------------------------ #
+    #  Custom patch rows                                                   #
+    # ------------------------------------------------------------------ #
+
+    def _add_patch_row(self):
+        row = PatchRow(self.patches_frame, on_remove=lambda r=None: self._remove_patch_row(row))
+        row.pack(fill="x", pady=2)
+        self.patch_rows.append(row)
+
+    def _remove_patch_row(self, row: PatchRow):
+        self.patch_rows.remove(row)
+        row.destroy()
+
+    # ------------------------------------------------------------------ #
     #  Helpers                                                             #
     # ------------------------------------------------------------------ #
 
@@ -122,6 +208,7 @@ class BuildPanel(ctk.CTkFrame):
         path = filedialog.askopenfilename(filetypes=[("PDB files", "*.pdb"), ("All files", "*.*")])
         if path:
             self.pdb_var.set(path)
+            self._load_ss_bonds(path)
 
     def _browse_outdir(self):
         path = filedialog.askdirectory()
@@ -160,6 +247,26 @@ class BuildPanel(ctk.CTkFrame):
         standard = collect_files(PARAMETERS_DIR, (".prm", ".str"))
         return standard + self.ligand_parameter_files
 
+    def _collect_patches(self) -> list[Patch]:
+        patches = []
+
+        # SS bonds that are checked
+        for bond, var in zip(self.detected_ss_bonds, self.ss_bond_vars):
+            if var.get():
+                patches.append(Patch(
+                    name="DISU",
+                    chain1=bond.chain1, resid1=bond.resid1,
+                    chain2=bond.chain2, resid2=bond.resid2,
+                ))
+
+        # User-defined patches
+        for row in self.patch_rows:
+            patch = row.to_patch()
+            if patch:
+                patches.append(patch)
+
+        return patches
+
     def _log(self, text: str):
         self.log_box.configure(state="normal")
         self.log_box.insert("end", text + "\n")
@@ -194,6 +301,7 @@ class BuildPanel(ctk.CTkFrame):
             pdb_file=pdb,
             topology_files=topology_files,
             parameter_files=self._collect_parameter_files(),
+            patches=self._collect_patches(),
             output_dir=outdir,
             padding=self.padding_var.get(),
             ionize=self.ionize_var.get(),
