@@ -6,6 +6,7 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 from gui.build_panel import BuildPanel
+from gui.prepare_panel import PreparePanel
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json")
 
@@ -32,7 +33,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("easyNAMD")
-        self.geometry("700x680")
+        self.geometry("1100x720")
         ctk.set_appearance_mode("system")
         ctk.set_default_color_theme("blue")
 
@@ -49,8 +50,13 @@ class App(ctk.CTk):
         self.tabs = ctk.CTkTabview(self)
         self.tabs.pack(fill="both", expand=True, padx=10, pady=10)
 
+        self.tabs.add("Prepare PDB")
         self.tabs.add("Build")
         self.tabs.add("Settings")
+
+        # Prepare PDB tab
+        self.prepare_panel = PreparePanel(self.tabs.tab("Prepare PDB"))
+        self.prepare_panel.pack(fill="both", expand=True)
 
         # Build tab
         self.build_panel = BuildPanel(self.tabs.tab("Build"), self.config_data)
