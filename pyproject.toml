@@ -8,4 +8,5 @@ dependencies = [
     "pillow>=12.2.0",
     "py3dmol>=2.5.5",
     "pywebview>=6.2.1",
+    "rdkit>=2026.3.3",
 ]

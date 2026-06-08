@@ -193,15 +193,33 @@ def tcl_build_psf(
     return "\n".join(parts)
 
 
-def tcl_solvate(in_prefix: str, out_prefix: str, padding: float) -> str:
-    """Return a Tcl block that wraps a structure in a TIP3P water box."""
+def tcl_solvate(in_prefix: str, out_prefix: str, padding: float,
+                rotate: bool = False) -> str:
+    """Return a Tcl block that wraps a structure in a TIP3P water box.
+    If rotate is set, the solute is rotated to minimize the box volume."""
+    rotate_flag = " -rotate" if rotate else ""
     return "\n".join([
         "# --- Solvate ---",
         "package require solvate",
         f'mol load psf "{in_prefix}.psf" pdb "{in_prefix}.pdb"',
         f'solvate "{in_prefix}.psf" "{in_prefix}.pdb" \\',
-        f'    -t {padding} \\',
+        f'    -t {padding}{rotate_flag} \\',
         f'    -o "{out_prefix}"',
+        "mol delete all",
+    ])
+
+
+def tcl_recenter(prefix: str) -> str:
+    """Return a Tcl block that moves the system's center of mass to the origin
+    and overwrites the PDB coordinates."""
+    return "\n".join([
+        "# --- Recenter to origin ---",
+        f'mol load psf "{prefix}.psf" pdb "{prefix}.pdb"',
+        'set _all [atomselect top all]',
+        'set _com [measure center $_all weight mass]',
+        '$_all moveby [vecscale -1.0 $_com]',
+        f'$_all writepdb "{prefix}.pdb"',
+        '$_all delete',
         "mol delete all",
     ])
 
@@ -235,6 +253,8 @@ def write_build_script(
     padding: float,
     ionize: bool,
     salt_concentration: float = 0.0,
+    rotate: bool = False,
+    recenter: bool = False,
     guesscoord: bool = True,
     regenerate_angles: bool = True,
     regenerate_dihedrals: bool = True,
@@ -270,11 +290,14 @@ def write_build_script(
             regenerate_resids=regenerate_resids,
         ),
         "",
-        tcl_solvate(psf_prefix, solvated_prefix, padding),
+        tcl_solvate(psf_prefix, solvated_prefix, padding, rotate=rotate),
     ]
 
     if ionize:
         blocks += ["", tcl_ionize(solvated_prefix, ionized_prefix, salt_concentration)]
+
+    if recenter:
+        blocks += ["", tcl_recenter(final_prefix)]
 
     blocks += [
         "",

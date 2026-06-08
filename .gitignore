@@ -10,3 +10,6 @@ wheels/
 .venv
 .DS_Store
 config.json
+
+# Generated RDKit images (regenerated on first run)
+assets/his/

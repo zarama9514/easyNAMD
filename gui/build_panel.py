@@ -1,4 +1,7 @@
 import os
+import subprocess
+import sys
+import tempfile
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
@@ -9,6 +12,12 @@ from core.pdb_parser import (
 )
 from core.tcl_writer import write_build_script
 from core.vmd_runner import run_vmd
+from core.viewer_html import build_residue_focus_html
+from core.his_images import tautomer_images
+
+from PIL import Image
+
+ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 
 ROOT_DIR       = os.path.dirname(os.path.dirname(__file__))
 TOPOLOGIES_DIR = os.path.join(ROOT_DIR, "topologies")
@@ -146,6 +155,8 @@ class BuildPanel(ctk.CTkFrame):
         # Histidine protonation
         section_label(scroll, "Histidine protonation").grid(row=row, column=0, columnspan=3, sticky="w", padx=8, pady=(10, 2))
         row += 1
+        self._build_his_legend(scroll, row)
+        row += 1
         self.his_frame = ctk.CTkFrame(scroll, fg_color="transparent")
         self.his_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=8)
         ctk.CTkLabel(self.his_frame, text="No histidines found", text_color="gray").pack(anchor="w")
@@ -206,11 +217,48 @@ class BuildPanel(ctk.CTkFrame):
     #  Tab 2 — Solvate                                                     #
     # ------------------------------------------------------------------ #
 
+    def _build_his_legend(self, parent, row):
+        """Show HSD/HSE/HSP structures (rendered by RDKit) as a quick reference."""
+        captions = {
+            "HSD": "proton on Nδ1 (neutral)",
+            "HSE": "proton on Nε2 (neutral)",
+            "HSP": "both protonated (+1)",
+        }
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.grid(row=row, column=0, columnspan=3, sticky="w", padx=14, pady=(0, 6))
+
+        self._his_imgs = []   # keep references so images aren't garbage-collected
+        try:
+            paths = tautomer_images()
+        except Exception:
+            paths = {}
+
+        for col, name in enumerate(("HSD", "HSE", "HSP")):
+            cell = ctk.CTkFrame(frame, fg_color="transparent")
+            cell.grid(row=0, column=col, padx=10)
+            if name in paths:
+                img = ctk.CTkImage(light_image=Image.open(paths[name]), size=(120, 120))
+                self._his_imgs.append(img)
+                ctk.CTkLabel(cell, image=img, text="").pack()
+            ctk.CTkLabel(cell, text=name, font=ctk.CTkFont(weight="bold")).pack()
+            ctk.CTkLabel(cell, text=captions[name], text_color="gray",
+                         font=ctk.CTkFont(size=11)).pack()
+
     def _build_solvate_tab(self, parent):
         parent.columnconfigure(1, weight=1)
         ctk.CTkLabel(parent, text="Box padding (Å):").grid(row=0, column=0, sticky="w", padx=10, pady=8)
         self.padding_var = tk.DoubleVar(value=10.0)
         ctk.CTkEntry(parent, textvariable=self.padding_var, width=80).grid(row=0, column=1, padx=5, sticky="w")
+
+        self.rotate_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(parent, text="Rotate solute to minimize box volume",
+                        variable=self.rotate_var).grid(row=1, column=0, columnspan=2,
+                                                       sticky="w", padx=10, pady=8)
+
+        self.recenter_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(parent, text="Move system center of mass to origin (0, 0, 0)",
+                        variable=self.recenter_var).grid(row=2, column=0, columnspan=2,
+                                                         sticky="w", padx=10, pady=8)
 
     # ------------------------------------------------------------------ #
     #  Tab 3 — Ionize                                                      #
@@ -295,6 +343,8 @@ class BuildPanel(ctk.CTkFrame):
             ctk.CTkLabel(row_frame, text=str(his), width=80).pack(side="left", padx=4)
             prot_var = tk.StringVar(value="HSD")
             ctk.CTkOptionMenu(row_frame, variable=prot_var, values=HIS_OPTIONS, width=90).pack(side="left", padx=4)
+            ctk.CTkButton(row_frame, text="View 3D", width=80,
+                          command=lambda h=his: self._view_residue(h.chain, h.resid)).pack(side="left", padx=4)
             self.his_rows.append({"his": his, "prot_var": prot_var})
 
     def _refresh_ss_bonds(self):
@@ -357,6 +407,20 @@ class BuildPanel(ctk.CTkFrame):
     def _remove_patch_row(self, row: PatchRow):
         self.patch_rows.remove(row)
         row.destroy()
+
+    def _view_residue(self, chain: str, resid: str):
+        """Open a 3D viewer focused on a residue (heavy atoms + 5 Å environment)."""
+        pdb = self.pdb_var.get().strip()
+        if not pdb or not os.path.isfile(pdb):
+            messagebox.showerror("Error", "Select a valid PDB file first.")
+            return
+        tmp_dir = tempfile.mkdtemp(prefix="easynamd_")
+        html = os.path.join(tmp_dir, "residue.html")
+        build_residue_focus_html(pdb, chain, resid, html, title=f"{chain}:{resid}")
+        subprocess.Popen(
+            [sys.executable, "-m", "gui.webview_window", html],
+            cwd=ROOT_DIR,
+        )
 
     def _collect_topology_files(self) -> list[str]:
         return collect_files(TOPOLOGIES_DIR, (".rtf", ".top")) + self.ligand_topology_files
@@ -438,6 +502,8 @@ class BuildPanel(ctk.CTkFrame):
             histidines=self._collect_histidines(),
             output_dir=outdir,
             padding=self.padding_var.get(),
+            rotate=self.rotate_var.get(),
+            recenter=self.recenter_var.get(),
             ionize=self.ionize_var.get(),
             salt_concentration=self.salt_var.get(),
             guesscoord=self.guesscoord_var.get(),
