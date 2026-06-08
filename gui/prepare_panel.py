@@ -70,8 +70,9 @@ class AltLocRow(ctk.CTkFrame):
 
 
 class PreparePanel(ctk.CTkFrame):
-    def __init__(self, parent):
+    def __init__(self, parent, on_saved=None):
         super().__init__(parent)
+        self._on_saved = on_saved          # called with the cleaned PDB path
         self._pdb_file:  str | None     = None
         self._groups:    list[MolGroup] = []
         self._rows:      list[GroupRow] = []
@@ -359,4 +360,9 @@ class PreparePanel(ctk.CTkFrame):
                              altloc_choices=self._altloc_choices(),
                              group_chains=self._group_chains(),
                              renumber=True)
-        messagebox.showinfo('Saved', f'Cleaned PDB saved to:\n{outpath}')
+
+        if self._on_saved and messagebox.askyesno(
+                'Saved', f'Cleaned PDB saved to:\n{outpath}\n\nUse it in the Build tab?'):
+            self._on_saved(outpath)
+        else:
+            messagebox.showinfo('Saved', f'Cleaned PDB saved to:\n{outpath}')

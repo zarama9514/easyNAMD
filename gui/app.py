@@ -54,13 +54,18 @@ class App(ctk.CTk):
         self.tabs.add("Build")
         self.tabs.add("Settings")
 
-        # Prepare PDB tab
-        self.prepare_panel = PreparePanel(self.tabs.tab("Prepare PDB"))
-        self.prepare_panel.pack(fill="both", expand=True)
-
         # Build tab
         self.build_panel = BuildPanel(self.tabs.tab("Build"), self.config_data)
         self.build_panel.pack(fill="both", expand=True)
+
+        # Prepare PDB tab (hands the cleaned PDB off to Build on save)
+        self.prepare_panel = PreparePanel(self.tabs.tab("Prepare PDB"),
+                                          on_saved=self._use_in_build)
+        self.prepare_panel.pack(fill="both", expand=True)
+
+    def _use_in_build(self, path: str):
+        self.build_panel.load_pdb_external(path)
+        self.tabs.set("Build")
 
         # Settings tab
         self._build_settings_tab(self.tabs.tab("Settings"))

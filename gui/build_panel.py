@@ -51,12 +51,12 @@ class PatchRow(ctk.CTkFrame):
         self.chain2_var = tk.StringVar()
         self.resid2_var = tk.StringVar()
 
-        ctk.CTkEntry(self, textvariable=self.name_var,   width=80,  placeholder_text="Patch").pack(side="left", padx=2)
-        ctk.CTkEntry(self, textvariable=self.chain1_var, width=50,  placeholder_text="Chain").pack(side="left", padx=2)
-        ctk.CTkEntry(self, textvariable=self.resid1_var, width=60,  placeholder_text="ResID").pack(side="left", padx=2)
-        ctk.CTkLabel(self, text="/").pack(side="left")
-        ctk.CTkEntry(self, textvariable=self.chain2_var, width=50,  placeholder_text="Chain2").pack(side="left", padx=2)
-        ctk.CTkEntry(self, textvariable=self.resid2_var, width=60,  placeholder_text="ResID2").pack(side="left", padx=2)
+        ctk.CTkEntry(self, textvariable=self.name_var,   width=90,  placeholder_text="CYSD").pack(side="left", padx=2)
+        ctk.CTkEntry(self, textvariable=self.chain1_var, width=55,  placeholder_text="chain L").pack(side="left", padx=2)
+        ctk.CTkEntry(self, textvariable=self.resid1_var, width=70,  placeholder_text="resid 211").pack(side="left", padx=2)
+        ctk.CTkLabel(self, text="2nd residue:", text_color="gray").pack(side="left", padx=(6, 2))
+        ctk.CTkEntry(self, textvariable=self.chain2_var, width=55,  placeholder_text="chain").pack(side="left", padx=2)
+        ctk.CTkEntry(self, textvariable=self.resid2_var, width=60,  placeholder_text="resid").pack(side="left", padx=2)
         ctk.CTkLabel(self, text="(optional)", text_color="gray").pack(side="left", padx=2)
         ctk.CTkButton(self, text="✕", width=28, fg_color="transparent",
                       text_color="red", command=on_remove).pack(side="left", padx=4)
@@ -85,6 +85,7 @@ class BuildPanel(ctk.CTkFrame):
         self.patch_rows:   list[PatchRow] = []
         self.ligand_topology_files:  list[str] = []
         self.ligand_parameter_files: list[str] = []
+        self._problems: list[str] = []
 
         self._build_ui()
 
@@ -107,7 +108,11 @@ class BuildPanel(ctk.CTkFrame):
         bottom = ctk.CTkFrame(self)
         bottom.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
-        ctk.CTkButton(bottom, text="Build", fg_color="green", command=self._run).pack(pady=(8, 4))
+        btn_row = ctk.CTkFrame(bottom, fg_color="transparent")
+        btn_row.pack(pady=(8, 4))
+        ctk.CTkButton(btn_row, text="Preview script", width=120,
+                      command=self._preview_script).pack(side="left", padx=6)
+        ctk.CTkButton(btn_row, text="Build", fg_color="green", command=self._run).pack(side="left", padx=6)
         self.log_box = ctk.CTkTextbox(bottom, height=180, wrap="none")
         self.log_box.pack(fill="both", expand=True, padx=5, pady=5)
 
@@ -203,19 +208,33 @@ class BuildPanel(ctk.CTkFrame):
         # Custom patches
         section_label(scroll, "Custom patches").grid(row=row, column=0, columnspan=3, sticky="w", padx=8, pady=(10, 2))
         row += 1
-        ctk.CTkLabel(scroll, text="Patch    Chain  ResID  /  Chain2  ResID2",
-                     text_color="gray", font=ctk.CTkFont(size=11)).grid(
-            row=row, column=0, columnspan=3, sticky="w", padx=10)
+        ctk.CTkLabel(
+            scroll,
+            text="patch name (e.g. CYSD)   ·   chain (e.g. L)   ·   resid (e.g. 211)   —   "
+                 "2nd residue only for two-residue patches (e.g. DISU)",
+            text_color="gray", font=ctk.CTkFont(size=11),
+        ).grid(row=row, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 2))
         row += 1
         self.patches_frame = ctk.CTkFrame(scroll, fg_color="transparent")
         self.patches_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=8)
-        row += 1
-        ctk.CTkButton(scroll, text="+ Add patch", width=110,
-                      command=self._add_patch_row).grid(row=row, column=0, columnspan=3, pady=6)
+        # "+ Add patch" lives inside patches_frame and is always kept last, so each
+        # new patch row appears above it and pushes it down.
+        self._add_patch_btn = ctk.CTkButton(self.patches_frame, text="+ Add patch",
+                                            width=110, command=self._add_patch_row)
+        self._add_patch_btn.pack(anchor="w", pady=6)
 
     # ------------------------------------------------------------------ #
     #  Tab 2 — Solvate                                                     #
     # ------------------------------------------------------------------ #
+
+    def load_pdb_external(self, path: str):
+        """Load a PDB into the Build tab (used by the Prepare → Build handoff)."""
+        if not os.path.isfile(path):
+            return
+        self.pdb_var.set(path)
+        if not self.outdir_var.get().strip():
+            self.outdir_var.set(os.path.dirname(path))
+        self._load_pdb(path)
 
     def _build_his_legend(self, parent, row):
         """Show HSD/HSE/HSP structures (rendered by RDKit) as a quick reference."""
@@ -302,6 +321,29 @@ class BuildPanel(ctk.CTkFrame):
             row.pack(anchor="w", pady=2)
             ctk.CTkLabel(row, text="⚠  Insertion codes detected —", text_color="orange").pack(side="left")
             ctk.CTkCheckBox(row, text="regenerate resids", variable=self.regen_resids_var).pack(side="left", padx=6)
+
+        if info.missing_residues:
+            ctk.CTkLabel(
+                self.warn_frame,
+                text=f"⚠  {info.missing_residues} missing residue(s) (REMARK 465) — "
+                     "guesscoord will build approximate coordinates",
+                text_color="orange",
+            ).pack(anchor="w", pady=2)
+
+        if info.missing_atoms:
+            ctk.CTkLabel(
+                self.warn_frame,
+                text=f"⚠  {info.missing_atoms} residue(s) with missing atoms (REMARK 470)",
+                text_color="orange",
+            ).pack(anchor="w", pady=2)
+
+        if info.chain_gaps:
+            shown = ", ".join(info.chain_gaps[:4]) + (" …" if len(info.chain_gaps) > 4 else "")
+            ctk.CTkLabel(
+                self.warn_frame,
+                text=f"⚠  Chain numbering gaps: {shown}",
+                text_color="orange",
+            ).pack(anchor="w", pady=2)
 
     def _refresh_segments(self):
         for w in self.segments_frame.winfo_children():
@@ -401,7 +443,7 @@ class BuildPanel(ctk.CTkFrame):
 
     def _add_patch_row(self):
         row = PatchRow(self.patches_frame, on_remove=lambda r=None: self._remove_patch_row(row))
-        row.pack(fill="x", pady=2)
+        row.pack(fill="x", pady=2, before=self._add_patch_btn)   # keep button last
         self.patch_rows.append(row)
 
     def _remove_patch_row(self, row: PatchRow):
@@ -463,37 +505,49 @@ class BuildPanel(ctk.CTkFrame):
         self.log_box.insert("end", text + "\n")
         self.log_box.see("end")
         self.log_box.configure(state="disabled")
+        self._scan_for_problems(text)
+
+    # psfgen / solvate messages that indicate a problem worth surfacing
+    _PROBLEM_PATTERNS = (
+        "unknown residue", "failed to set coordinate", "poorly guessed",
+        "failed to guess", "bad bond", "duplicate", "ERROR", "error:",
+        "couldn't find", "warning: missing",
+    )
+
+    def _scan_for_problems(self, line: str):
+        low = line.lower()
+        for pat in self._PROBLEM_PATTERNS:
+            if pat.lower() in low:
+                self._problems.append(line.strip())
+                break
 
     # ------------------------------------------------------------------ #
     #  Build                                                               #
     # ------------------------------------------------------------------ #
 
-    def _run(self):
+    def _build_script_or_none(self) -> str | None:
+        """Validate inputs and write the build.tcl. Returns its path or None."""
         pdb    = self.pdb_var.get().strip()
         outdir = self.outdir_var.get().strip()
-        vmd    = self.config.get("vmd_path", "").strip()
 
         if not pdb or not os.path.isfile(pdb):
             messagebox.showerror("Error", "Select a valid PDB file.")
-            return
+            return None
         if not outdir:
             messagebox.showerror("Error", "Select an output directory.")
-            return
-        if not vmd or not os.path.isfile(vmd):
-            messagebox.showerror("Error", "VMD binary not found. Check Settings.")
-            return
+            return None
 
         topology_files = self._collect_topology_files()
         if not topology_files:
             messagebox.showerror("Error", "No topology files found in topologies/.")
-            return
+            return None
 
         segments = self._collect_segments()
         if not segments:
             messagebox.showerror("Error", "No chains detected. Load a PDB file first.")
-            return
+            return None
 
-        script = write_build_script(
+        return write_build_script(
             pdb_file=pdb,
             topology_files=topology_files,
             parameter_files=self._collect_parameter_files(),
@@ -512,6 +566,29 @@ class BuildPanel(ctk.CTkFrame):
             regenerate_resids=self.regen_resids_var.get(),
         )
 
+    def _preview_script(self):
+        script = self._build_script_or_none()
+        if not script:
+            return
+        with open(script) as f:
+            content = f.read()
+        self.log_box.configure(state="normal")
+        self.log_box.delete("1.0", "end")
+        self.log_box.insert("end", f"# Preview: {script}\n# (not executed)\n\n{content}")
+        self.log_box.see("1.0")
+        self.log_box.configure(state="disabled")
+
+    def _run(self):
+        vmd = self.config.get("vmd_path", "").strip()
+        if not vmd or not os.path.isfile(vmd):
+            messagebox.showerror("Error", "VMD binary not found. Check Settings.")
+            return
+
+        script = self._build_script_or_none()
+        if not script:
+            return
+
+        self._problems = []
         self.log_box.configure(state="normal")
         self.log_box.delete("1.0", "end")
         self.log_box.configure(state="disabled")
@@ -525,9 +602,21 @@ class BuildPanel(ctk.CTkFrame):
         )
 
     def _on_done(self, success: bool):
-        if success:
-            self._log("\nBuild complete.")
-            messagebox.showinfo("Done", "Structure built successfully.")
-        else:
+        problems = getattr(self, "_problems", [])
+        if not success:
             self._log("\nBuild failed. Check the log above.")
             messagebox.showerror("Failed", "VMD exited with an error.")
+            return
+
+        if problems:
+            preview = "\n".join(f"  • {p}" for p in problems[:12])
+            more = f"\n…and {len(problems) - 12} more" if len(problems) > 12 else ""
+            self._log(f"\nBuild finished with {len(problems)} warning(s):\n{preview}{more}")
+            messagebox.showwarning(
+                "Build finished with warnings",
+                f"{len(problems)} potential problem(s) detected in the psfgen log.\n"
+                "Review the log — coordinates may have been guessed or residues skipped.",
+            )
+        else:
+            self._log("\nBuild complete — no problems detected.")
+            messagebox.showinfo("Done", "Structure built successfully.")

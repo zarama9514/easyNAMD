@@ -224,6 +224,29 @@ def tcl_recenter(prefix: str) -> str:
     ])
 
 
+def tcl_write_cell(prefix: str, cell_file: str) -> str:
+    """Return a Tcl block that measures the periodic cell of the final system and
+    writes NAMD cellBasisVector / cellOrigin lines to a file."""
+    return "\n".join([
+        "# --- Periodic cell (for NAMD) ---",
+        f'mol load psf "{prefix}.psf" pdb "{prefix}.pdb"',
+        'set _all [atomselect top all]',
+        'set _mm [measure minmax $_all]',
+        'set _min [lindex $_mm 0]',
+        'set _max [lindex $_mm 1]',
+        'set _size [vecsub $_max $_min]',
+        'set _cen [measure center $_all]',
+        f'set _fp [open "{cell_file}" w]',
+        'puts $_fp "cellBasisVector1 [lindex $_size 0] 0 0"',
+        'puts $_fp "cellBasisVector2 0 [lindex $_size 1] 0"',
+        'puts $_fp "cellBasisVector3 0 0 [lindex $_size 2]"',
+        'puts $_fp "cellOrigin $_cen"',
+        'close $_fp',
+        '$_all delete',
+        "mol delete all",
+    ])
+
+
 def tcl_ionize(in_prefix: str, out_prefix: str, salt_concentration: float = 0.0) -> str:
     """Return a Tcl block that neutralizes the system and optionally sets salt concentration."""
     salt_flag = f"-sc {salt_concentration} " if salt_concentration > 0.0 else ""
@@ -299,9 +322,13 @@ def write_build_script(
     if recenter:
         blocks += ["", tcl_recenter(final_prefix)]
 
+    cell_file = os.path.join(output_dir, "cell.txt")
+    blocks += ["", tcl_write_cell(final_prefix, cell_file)]
+
     blocks += [
         "",
         f'puts "easyNAMD: done. Final structure: {final_prefix}"',
+        f'puts "easyNAMD: periodic cell written to: {cell_file}"',
         "quit",
     ]
 
