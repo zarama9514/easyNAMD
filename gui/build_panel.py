@@ -13,7 +13,7 @@ from core.pdb_parser import (
     HeteroResidue, HeteroSegment, HisResidue, Patch, PDBInfo, SegmentConfig,
     find_hetero_residues, parse_pdb,
 )
-from core.coverage import uncovered_residues
+from core.coverage import uncovered_built_residues
 from core.tcl_writer import write_build_script
 from core.vmd_runner import run_vmd
 from core.viewer_html import build_residue_focus_html
@@ -61,10 +61,10 @@ class PatchRow(ctk.CTkFrame):
         self.resid2_var = tk.StringVar()
 
         ctk.CTkEntry(self, textvariable=self.name_var,   width=90,  placeholder_text="CYSD").pack(side="left", padx=2)
-        ctk.CTkEntry(self, textvariable=self.chain1_var, width=55,  placeholder_text="chain L").pack(side="left", padx=2)
+        ctk.CTkEntry(self, textvariable=self.chain1_var, width=70,  placeholder_text="segid L").pack(side="left", padx=2)
         ctk.CTkEntry(self, textvariable=self.resid1_var, width=70,  placeholder_text="resid 211").pack(side="left", padx=2)
         ctk.CTkLabel(self, text="2nd residue:", text_color="gray").pack(side="left", padx=(6, 2))
-        ctk.CTkEntry(self, textvariable=self.chain2_var, width=55,  placeholder_text="chain").pack(side="left", padx=2)
+        ctk.CTkEntry(self, textvariable=self.chain2_var, width=70,  placeholder_text="segid").pack(side="left", padx=2)
         ctk.CTkEntry(self, textvariable=self.resid2_var, width=60,  placeholder_text="resid").pack(side="left", padx=2)
         ctk.CTkLabel(self, text="(optional)", text_color="gray").pack(side="left", padx=2)
         ctk.CTkButton(self, text="✕", width=28, fg_color="transparent",
@@ -202,7 +202,9 @@ class BuildPanel(ctk.CTkFrame):
         section_label(scroll, "Hetero segments (ligands / ions)").grid(
             row=row, column=0, columnspan=3, sticky="w", padx=8, pady=(10, 2))
         row += 1
-        ctk.CTkLabel(scroll, text="include as segment — needs matching topology/parameters loaded above",
+        ctk.CTkLabel(scroll,
+                     text="tick to build into the PSF as its own segment (needs matching "
+                          "topology/parameters above).  segname = segid, ≤4 chars",
                      text_color="gray", font=ctk.CTkFont(size=11)).grid(
             row=row, column=0, columnspan=3, sticky="w", padx=10)
         row += 1
@@ -210,6 +212,17 @@ class BuildPanel(ctk.CTkFrame):
         self.hetero_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=8)
         ctk.CTkLabel(self.hetero_frame, text="Load a PDB to detect hetero residues",
                      text_color="gray").pack(anchor="w")
+        row += 1
+
+        # Crystal water
+        cwater = ctk.CTkFrame(scroll, fg_color="transparent")
+        cwater.grid(row=row, column=0, columnspan=3, sticky="w", padx=8, pady=(4, 0))
+        self.keep_water_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(cwater, text="Keep crystal water (build as segment)",
+                        variable=self.keep_water_var).pack(side="left")
+        ctk.CTkLabel(cwater, text="segname:", text_color="gray").pack(side="left", padx=(8, 2))
+        self.water_segname_var = tk.StringVar(value="XWAT")
+        ctk.CTkEntry(cwater, textvariable=self.water_segname_var, width=70).pack(side="left")
         row += 1
 
         # Build options
@@ -240,8 +253,8 @@ class BuildPanel(ctk.CTkFrame):
         row += 1
         ctk.CTkLabel(
             scroll,
-            text="patch name (e.g. CYSD)   ·   chain (e.g. L)   ·   resid (e.g. 211)   —   "
-                 "2nd residue only for two-residue patches (e.g. DISU)",
+            text="patch name (e.g. CYSD)   ·   segid (protein = chain, e.g. L; hetero = segname)   ·   "
+                 "resid (e.g. 211)   —   2nd residue only for two-residue patches (e.g. DISU)",
             text_color="gray", font=ctk.CTkFont(size=11),
         ).grid(row=row, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 2))
         row += 1
@@ -360,8 +373,8 @@ class BuildPanel(ctk.CTkFrame):
             row = ctk.CTkFrame(self.hetero_frame, fg_color="transparent")
             row.pack(fill="x", pady=2)
             include_var = tk.BooleanVar(value=False)
-            ctk.CTkCheckBox(row, text="", width=24, variable=include_var).pack(side="left")
-            ctk.CTkLabel(row, text=het.label(), anchor="w", width=240).pack(side="left", padx=4)
+            ctk.CTkCheckBox(row, text=het.label(), variable=include_var,
+                            width=300).pack(side="left")
             ctk.CTkLabel(row, text="segname:", text_color="gray").pack(side="left", padx=(6, 2))
             segname_var = tk.StringVar(value=het.default_segname())
             ctk.CTkEntry(row, textvariable=segname_var, width=70).pack(side="left")
@@ -486,7 +499,7 @@ class BuildPanel(ctk.CTkFrame):
         paths = filedialog.askopenfilenames(
             title="Select ligand topology files",
             initialdir=os.path.join(TOPOLOGIES_DIR, "ligands"),
-            filetypes=[("CHARMM topology", "*.rtf *.top"), ("All files", "*.*")],
+            filetypes=[("CHARMM topology", "*.rtf *.top *.str"), ("All files", "*.*")],
         )
         if paths:
             self.ligand_topology_files.extend(paths)
@@ -529,7 +542,8 @@ class BuildPanel(ctk.CTkFrame):
         )
 
     def _collect_topology_files(self) -> list[str]:
-        return collect_files(TOPOLOGIES_DIR, (".rtf", ".top")) + self.ligand_topology_files
+        # .str (CHARMM stream) files also carry RESI topology definitions
+        return collect_files(TOPOLOGIES_DIR, (".rtf", ".top", ".str")) + self.ligand_topology_files
 
     def _collect_parameter_files(self) -> list[str]:
         return collect_files(PARAMETERS_DIR, (".prm", ".str")) + self.ligand_parameter_files
@@ -560,6 +574,10 @@ class BuildPanel(ctk.CTkFrame):
                 segname = r["segname_var"].get().strip() or het.default_segname()
                 result.append(HeteroSegment(segname=segname, resname=het.resname,
                                             chain=het.chain))
+        if self.keep_water_var.get():
+            wname = self.water_segname_var.get().strip() or "XWAT"
+            result.append(HeteroSegment(segname=wname, resname="HOH",
+                                        chain="", selection="water"))
         return result
 
     def _collect_patches(self) -> list[Patch]:
@@ -762,15 +780,36 @@ class BuildPanel(ctk.CTkFrame):
             messagebox.showerror("Error", "No chains detected. Load a PDB file first.")
             return None
 
-        # Parameter coverage check (warn, don't block)
-        missing = uncovered_residues(pdb, topology_files)
+        # Validate hetero / water segment names (psfgen: ≤4 chars, unique)
+        hetero_segments = self._collect_hetero_segments()
+        seen_segids = {s.chain for s in segments}
+        for h in hetero_segments:
+            if not h.segname.isalnum() or len(h.segname) > 4:
+                messagebox.showerror(
+                    "Invalid segname",
+                    f"Segment name '{h.segname}' must be 1–4 alphanumeric characters.")
+                return None
+            if h.segname in seen_segids:
+                messagebox.showerror(
+                    "Duplicate segname",
+                    f"Segment name '{h.segname}' collides with another chain/segment.")
+                return None
+            seen_segids.add(h.segname)
+
+        # Parameter coverage check — only for residues that are actually built
+        # (included hetero segments). Standard protein residues are covered; any
+        # hetero not selected here is simply left out by psfgen, so it's not a
+        # problem. Crystal water (TIP3) is covered by the water topology.
+        missing = uncovered_built_residues(
+            [h.resname for h in hetero_segments if not h.selection], topology_files)
         if missing:
-            shown = ", ".join(missing[:15]) + (" …" if len(missing) > 15 else "")
+            shown = ", ".join(missing)
             if not messagebox.askyesno(
-                    "Uncovered residues",
-                    f"These residue(s) are not defined in the loaded topologies:\n\n{shown}\n\n"
-                    "They will cause 'unknown residue' errors unless built as hetero "
-                    "segments with matching topology.\n\nContinue anyway?"):
+                    "Missing topology",
+                    f"These hetero segments are set to be built but their residue is "
+                    f"not defined in the loaded topologies:\n\n{shown}\n\n"
+                    "psfgen will fail with 'unknown residue'. Load matching "
+                    "topology/parameters, or untick them.\n\nContinue anyway?"):
                 return None
 
         return write_build_script(
@@ -788,7 +827,7 @@ class BuildPanel(ctk.CTkFrame):
             salt_concentration=self.salt_var.get(),
             cation=CATION_TYPES.get(self.cation_var.get(), "SOD"),
             anion=ANION_TYPES.get(self.anion_var.get(), "CLA"),
-            hetero_segments=self._collect_hetero_segments(),
+            hetero_segments=hetero_segments,
             guesscoord=self.guesscoord_var.get(),
             regenerate_angles=self.regen_angles_var.get(),
             regenerate_dihedrals=self.regen_dihedrals_var.get(),
@@ -828,6 +867,7 @@ class BuildPanel(ctk.CTkFrame):
             tcl_script=script,
             on_output=lambda line: self.after(0, self._log, line),
             on_done=lambda ok: self.after(0, self._on_done, ok),
+            cwd=self.outdir_var.get().strip(),
         )
 
     def _on_done(self, success: bool):

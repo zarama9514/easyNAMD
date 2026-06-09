@@ -13,6 +13,18 @@ _RESIDUE_ALIASES = [
     ("HID", "HSD"),
     ("HIE", "HSE"),
     ("HIP", "HSP"),
+    # ions: PDB name → CHARMM36 toppar_water_ions resname
+    ("NA",  "SOD"),
+    ("CL",  "CLA"),
+    ("K",   "POT"),
+    ("CA",  "CAL"),
+    ("MG",  "MG"),
+    ("ZN",  "ZN2"),
+    ("CD",  "CD2"),
+    ("LI",  "LIT"),
+    ("RB",  "RUB"),
+    ("CS",  "CES"),
+    ("BA",  "BAR"),
 ]
 
 _ATOM_ALIASES = [
@@ -55,9 +67,12 @@ def _tcl_split_chains(pdb_file: str, chains: list[str], tmp_dir: str,
         out = os.path.join(tmp_dir, f"chain_{chain}.pdb")
         lines.append(f'[atomselect top "protein and chain {chain}"] writepdb "{out}"')
     for seg in hetero_segments:
-        sel = f'resname {seg.resname}'
-        if seg.chain:
-            sel += f' and chain {seg.chain}'
+        if seg.selection:
+            sel = seg.selection
+        else:
+            sel = f'resname {seg.resname}'
+            if seg.chain:
+                sel += f' and chain {seg.chain}'
         lines.append(f'[atomselect top "{sel}"] writepdb "{_hetero_pdb(tmp_dir, seg)}"')
     lines.append("mol delete all")
     return "\n".join(lines)

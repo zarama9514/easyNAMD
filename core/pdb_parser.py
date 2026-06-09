@@ -61,10 +61,13 @@ class HeteroResidue:
 
 @dataclass
 class HeteroSegment:
-    """A hetero residue chosen to be built as its own psfgen segment."""
-    segname: str
-    resname: str
-    chain:   str
+    """A hetero residue chosen to be built as its own psfgen segment.
+    `selection`, if set, overrides the default `resname …` atomselect
+    (used e.g. to build crystal water with the `water` selection)."""
+    segname:   str
+    resname:   str
+    chain:     str
+    selection: str = ""
 
 
 @dataclass

@@ -3,6 +3,8 @@
 # PDB → CHARMM residue aliases applied during the build (mirror of tcl_writer)
 _RESIDUE_ALIASES = {
     "HIS": "HSD", "HOH": "TIP3", "HID": "HSD", "HIE": "HSE", "HIP": "HSP",
+    "NA": "SOD", "CL": "CLA", "K": "POT", "CA": "CAL", "MG": "MG", "ZN": "ZN2",
+    "CD": "CD2", "LI": "LIT", "RB": "RUB", "CS": "CES", "BA": "BAR",
 }
 
 
@@ -31,6 +33,19 @@ def pdb_resnames(pdb_file: str) -> set[str]:
                 if rn:
                     names.add(rn)
     return names
+
+
+def uncovered_built_residues(resnames: list[str], topology_files: list[str]) -> list[str]:
+    """Of the given residue names (those actually being built), return the ones
+    not defined in the loaded topologies (after applying standard aliases)."""
+    covered = topology_resnames(topology_files)
+    missing = []
+    for rn in resnames:
+        rn = rn.upper()
+        mapped = _RESIDUE_ALIASES.get(rn, rn)
+        if mapped not in covered and rn not in missing:
+            missing.append(rn)
+    return missing
 
 
 def uncovered_residues(pdb_file: str, topology_files: list[str]) -> list[str]:
