@@ -14,6 +14,7 @@ from core.pdb_parser import (
     find_hetero_residues, parse_pdb,
 )
 from core.coverage import uncovered_built_residues
+from core.zinc import detect_zinc_coordination
 from core.tcl_writer import write_build_script
 from core.vmd_runner import run_vmd
 from core.viewer_html import build_residue_focus_html
@@ -93,6 +94,9 @@ class BuildPanel(ctk.CTkFrame):
         self.ss_rows:      list[dict] = []   # {bond, enabled_var}
         self.hetero_rows:  list[dict] = []   # {hetero, include_var, segname_var}
         self.patch_rows:   list[PatchRow] = []
+        self._auto_patch_rows: list[PatchRow] = []   # auto CYSD rows from Zn detection
+        self._zn_cys: list = []
+        self._zn_his: list = []
         self.ligand_topology_files:  list[str] = []
         self.ligand_parameter_files: list[str] = []
         self._problems: list[str] = []
@@ -238,6 +242,11 @@ class BuildPanel(ctk.CTkFrame):
         ctk.CTkCheckBox(opts, text="regenerate angles",    variable=self.regen_angles_var).grid(row=0, column=1, padx=8, pady=2, sticky="w")
         ctk.CTkCheckBox(opts, text="regenerate dihedrals", variable=self.regen_dihedrals_var).grid(row=0, column=2, padx=8, pady=2, sticky="w")
         ctk.CTkCheckBox(opts, text="regenerate resids",    variable=self.regen_resids_var).grid(row=0, column=3, padx=8, pady=2, sticky="w")
+        self.auto_zn_var = tk.BooleanVar(value=True)
+        ctk.CTkCheckBox(opts, text="auto Zn coordination (CYSD + HIS tautomer)",
+                        variable=self.auto_zn_var,
+                        command=self._reapply_zinc).grid(row=1, column=0, columnspan=4,
+                                                         padx=8, pady=2, sticky="w")
         row += 1
 
         # Disulfide bonds
@@ -352,11 +361,48 @@ class BuildPanel(ctk.CTkFrame):
 
     def _load_pdb(self, path: str):
         self.pdb_info = parse_pdb(path)
+        self._zn_cys, self._zn_his = detect_zinc_coordination(path)
         self._refresh_warnings()
         self._refresh_segments()
         self._refresh_histidines()
         self._refresh_ss_bonds()
         self._refresh_hetero(path)
+        self._apply_zinc_cys_patches()
+
+    # ------------------------------------------------------------------ #
+    #  Zinc coordination (auto CYSD + HIS tautomer)                        #
+    # ------------------------------------------------------------------ #
+
+    def _zn_his_protonation(self, chain: str, resid: str) -> str | None:
+        if not self.auto_zn_var.get():
+            return None
+        for h in self._zn_his:
+            if h.chain == chain and h.resid == resid:
+                return h.protonation
+        return None
+
+    def _apply_zinc_cys_patches(self):
+        """Add a CYSD patch row for each Zn-coordinating cysteine (auto)."""
+        for row in list(self._auto_patch_rows):
+            if row in self.patch_rows:
+                self._remove_patch_row(row)
+        self._auto_patch_rows.clear()
+        if not self.auto_zn_var.get():
+            return
+        for c in self._zn_cys:
+            self._add_patch_row()
+            row = self.patch_rows[-1]
+            row.name_var.set("CYSD")
+            row.chain1_var.set(c.chain)
+            row.resid1_var.set(c.resid)
+            self._auto_patch_rows.append(row)
+
+    def _reapply_zinc(self):
+        """Re-apply Zn-based defaults when the checkbox is toggled."""
+        if not self.pdb_info:
+            return
+        self._refresh_histidines()
+        self._apply_zinc_cys_patches()
 
     def _refresh_hetero(self, path: str):
         for w in self.hetero_frame.winfo_children():
@@ -460,10 +506,14 @@ class BuildPanel(ctk.CTkFrame):
             row_frame = ctk.CTkFrame(self.his_frame, fg_color="transparent")
             row_frame.pack(fill="x", pady=2)
             ctk.CTkLabel(row_frame, text=str(his), width=80).pack(side="left", padx=4)
-            prot_var = tk.StringVar(value="HSD")
+            zn_prot = self._zn_his_protonation(his.chain, his.resid)
+            prot_var = tk.StringVar(value=zn_prot or "HSD")
             ctk.CTkOptionMenu(row_frame, variable=prot_var, values=HIS_OPTIONS, width=90).pack(side="left", padx=4)
             ctk.CTkButton(row_frame, text="View 3D", width=80,
                           command=lambda h=his: self._view_residue(h.chain, h.resid)).pack(side="left", padx=4)
+            if zn_prot:
+                ctk.CTkLabel(row_frame, text=f"↳ metal-coordinating → {zn_prot}",
+                             text_color="#33ccaa").pack(side="left", padx=6)
             self.his_rows.append({"his": his, "prot_var": prot_var})
 
     def _refresh_ss_bonds(self):
@@ -847,6 +897,14 @@ class BuildPanel(ctk.CTkFrame):
         self.log_box.configure(state="disabled")
 
     def _run(self):
+        try:
+            self._run_impl()
+        except Exception as e:
+            import traceback
+            messagebox.showerror("Build error", f"{type(e).__name__}: {e}")
+            self._log("\nERROR while preparing build:\n" + traceback.format_exc())
+
+    def _run_impl(self):
         vmd = self.config.get("vmd_path", "").strip()
         if not vmd or not os.path.isfile(vmd):
             messagebox.showerror("Error", "VMD binary not found. Check Settings.")
