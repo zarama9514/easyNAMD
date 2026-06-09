@@ -1,5 +1,5 @@
 import os
-from core.pdb_parser import HisResidue, Patch, SegmentConfig
+from core.pdb_parser import HeteroSegment, HisResidue, Patch, SegmentConfig
 
 
 # ------------------------------------------------------------------ #
@@ -39,17 +39,39 @@ def _tcl_aliases() -> str:
 #  Chain splitting                                                     #
 # ------------------------------------------------------------------ #
 
-def _tcl_split_chains(pdb_file: str, chains: list[str], tmp_dir: str) -> str:
-    """VMD commands to write one PDB per chain into tmp_dir."""
+def _hetero_pdb(tmp_dir: str, seg: HeteroSegment) -> str:
+    return os.path.join(tmp_dir, f"het_{seg.segname}.pdb")
+
+
+def _tcl_split_chains(pdb_file: str, chains: list[str], tmp_dir: str,
+                      hetero_segments: list[HeteroSegment] | None = None) -> str:
+    """VMD commands to write one PDB per protein chain and per hetero segment."""
+    hetero_segments = hetero_segments or []
     lines = [
-        "# --- Split PDB by chain ---",
+        "# --- Split PDB by chain / hetero residue ---",
         f'mol load pdb "{pdb_file}"',
     ]
     for chain in chains:
         out = os.path.join(tmp_dir, f"chain_{chain}.pdb")
-        lines.append(f'[atomselect top "chain {chain}"] writepdb "{out}"')
+        lines.append(f'[atomselect top "protein and chain {chain}"] writepdb "{out}"')
+    for seg in hetero_segments:
+        sel = f'resname {seg.resname}'
+        if seg.chain:
+            sel += f' and chain {seg.chain}'
+        lines.append(f'[atomselect top "{sel}"] writepdb "{_hetero_pdb(tmp_dir, seg)}"')
     lines.append("mol delete all")
     return "\n".join(lines)
+
+
+def _tcl_hetero_segment(seg: HeteroSegment, pdb_file: str) -> str:
+    """Segment block for a single hetero residue (ligand / cofactor / ion)."""
+    return (
+        f'segment {seg.segname} {{\n'
+        f'    pdb "{pdb_file}"\n'
+        f'    first none\n'
+        f'    last  none\n'
+        f'}}'
+    )
 
 
 # ------------------------------------------------------------------ #
@@ -111,12 +133,14 @@ def tcl_build_psf(
     histidines: list[HisResidue],
     out_prefix: str,
     tmp_dir: str,
+    hetero_segments: list[HeteroSegment] | None = None,
     guesscoord: bool = True,
     regenerate_angles: bool = True,
     regenerate_dihedrals: bool = True,
     regenerate_resids: bool = False,
 ) -> str:
     """Return a complete Tcl block that builds a PSF/PDB using psfgen."""
+    hetero_segments = hetero_segments or []
 
     topology_lines   = "\n".join(f'topology "{t}"' for t in topology_files)
     parameter_lines  = "\n".join(f'readparameters "{p}"' for p in parameter_files)
@@ -127,15 +151,15 @@ def tcl_build_psf(
     }
 
     segment_blocks = "\n\n".join(
-        _tcl_segment(seg, chain_pdbs[seg.chain], histidines)
-        for seg in segments
+        [_tcl_segment(seg, chain_pdbs[seg.chain], histidines) for seg in segments]
+        + [_tcl_hetero_segment(h, _hetero_pdb(tmp_dir, h)) for h in hetero_segments]
     )
 
     patch_block = _tcl_patches(patches)
 
     coordpdb_lines = "\n".join(
-        f'coordpdb "{chain_pdbs[seg.chain]}" {seg.chain}'
-        for seg in segments
+        [f'coordpdb "{chain_pdbs[seg.chain]}" {seg.chain}' for seg in segments]
+        + [f'coordpdb "{_hetero_pdb(tmp_dir, h)}" {h.segname}' for h in hetero_segments]
     )
 
     options_lines = []
@@ -189,6 +213,8 @@ def tcl_build_psf(
     ]
     for seg in segments:
         parts.append(f'file delete "{chain_pdbs[seg.chain]}"')
+    for h in hetero_segments:
+        parts.append(f'file delete "{_hetero_pdb(tmp_dir, h)}"')
 
     return "\n".join(parts)
 
@@ -247,16 +273,33 @@ def tcl_write_cell(prefix: str, cell_file: str) -> str:
     ])
 
 
-def tcl_ionize(in_prefix: str, out_prefix: str, salt_concentration: float = 0.0) -> str:
-    """Return a Tcl block that neutralizes the system and optionally sets salt concentration."""
+def tcl_ionize(in_prefix: str, out_prefix: str, salt_concentration: float = 0.0,
+               cation: str = "SOD", anion: str = "CLA") -> str:
+    """Return a Tcl block that neutralizes the system and optionally sets salt
+    concentration, using the given ion types (CHARMM resnames)."""
     salt_flag = f"-sc {salt_concentration} " if salt_concentration > 0.0 else ""
     return "\n".join([
         "# --- Ionize ---",
         "package require autoionize",
         f'mol load psf "{in_prefix}.psf" pdb "{in_prefix}.pdb"',
         f'autoionize -psf "{in_prefix}.psf" -pdb "{in_prefix}.pdb" \\',
-        f'    -neutralize {salt_flag}\\',
+        f'    -neutralize {salt_flag}-cation {cation} -anion {anion} \\',
         f'    -o "{out_prefix}"',
+        "mol delete all",
+    ])
+
+
+def tcl_summary(prefix: str) -> str:
+    """Return a Tcl block that reports total charge and atom count of the final
+    system (the charge should be ~0 after neutralization)."""
+    return "\n".join([
+        "# --- System summary ---",
+        f'mol load psf "{prefix}.psf" pdb "{prefix}.pdb"',
+        'set _all [atomselect top all]',
+        'set _q [eval vecadd [$_all get charge]]',
+        'puts [format "easyNAMD: total charge = %.4f" $_q]',
+        'puts "easyNAMD: atom count = [$_all num]"',
+        '$_all delete',
         "mol delete all",
     ])
 
@@ -276,8 +319,11 @@ def write_build_script(
     padding: float,
     ionize: bool,
     salt_concentration: float = 0.0,
+    cation: str = "SOD",
+    anion: str = "CLA",
     rotate: bool = False,
     recenter: bool = False,
+    hetero_segments: list[HeteroSegment] | None = None,
     guesscoord: bool = True,
     regenerate_angles: bool = True,
     regenerate_dihedrals: bool = True,
@@ -285,6 +331,7 @@ def write_build_script(
 ) -> str:
     """Assemble all Tcl blocks into a single build script.
     Returns the path to the written script."""
+    hetero_segments = hetero_segments or []
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -296,7 +343,8 @@ def write_build_script(
     blocks = [
         "# easyNAMD — auto-generated build script",
         "",
-        _tcl_split_chains(pdb_file, [s.chain for s in segments], output_dir),
+        _tcl_split_chains(pdb_file, [s.chain for s in segments], output_dir,
+                          hetero_segments),
         "",
         tcl_build_psf(
             pdb_file=pdb_file,
@@ -307,6 +355,7 @@ def write_build_script(
             histidines=histidines,
             out_prefix=psf_prefix,
             tmp_dir=output_dir,
+            hetero_segments=hetero_segments,
             guesscoord=guesscoord,
             regenerate_angles=regenerate_angles,
             regenerate_dihedrals=regenerate_dihedrals,
@@ -317,13 +366,15 @@ def write_build_script(
     ]
 
     if ionize:
-        blocks += ["", tcl_ionize(solvated_prefix, ionized_prefix, salt_concentration)]
+        blocks += ["", tcl_ionize(solvated_prefix, ionized_prefix,
+                                   salt_concentration, cation, anion)]
 
     if recenter:
         blocks += ["", tcl_recenter(final_prefix)]
 
     cell_file = os.path.join(output_dir, "cell.txt")
     blocks += ["", tcl_write_cell(final_prefix, cell_file)]
+    blocks += ["", tcl_summary(final_prefix)]
 
     blocks += [
         "",

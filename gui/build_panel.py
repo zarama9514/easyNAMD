@@ -7,9 +7,13 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
+import json
+
 from core.pdb_parser import (
-    HisResidue, Patch, PDBInfo, SegmentConfig, parse_pdb,
+    HeteroResidue, HeteroSegment, HisResidue, Patch, PDBInfo, SegmentConfig,
+    find_hetero_residues, parse_pdb,
 )
+from core.coverage import uncovered_residues
 from core.tcl_writer import write_build_script
 from core.vmd_runner import run_vmd
 from core.viewer_html import build_residue_focus_html
@@ -26,6 +30,11 @@ PARAMETERS_DIR = os.path.join(ROOT_DIR, "parameters")
 NTER_OPTIONS = ["NTER", "GLYP", "PROP", "ACE", "none"]
 CTER_OPTIONS = ["CTER", "CT1", "CT2", "CT3", "none"]
 HIS_OPTIONS  = ["HSD", "HSE", "HSP"]
+
+# label → CHARMM resname
+CATION_TYPES = {"Na+ (SOD)": "SOD", "K+ (POT)": "POT", "Ca2+ (CAL)": "CAL",
+                "Mg2+ (MG)": "MG", "Cs+ (CES)": "CES"}
+ANION_TYPES  = {"Cl- (CLA)": "CLA"}
 
 
 def collect_files(folder: str, extensions: tuple) -> list[str]:
@@ -82,6 +91,7 @@ class BuildPanel(ctk.CTkFrame):
         self.segment_rows: list[dict] = []   # {chain, first_var, last_var}
         self.his_rows:     list[dict] = []   # {his, prot_var}
         self.ss_rows:      list[dict] = []   # {bond, enabled_var}
+        self.hetero_rows:  list[dict] = []   # {hetero, include_var, segname_var}
         self.patch_rows:   list[PatchRow] = []
         self.ligand_topology_files:  list[str] = []
         self.ligand_parameter_files: list[str] = []
@@ -110,6 +120,12 @@ class BuildPanel(ctk.CTkFrame):
 
         btn_row = ctk.CTkFrame(bottom, fg_color="transparent")
         btn_row.pack(pady=(8, 4))
+        ctk.CTkButton(btn_row, text="Summary", width=90,
+                      command=self._show_summary).pack(side="left", padx=6)
+        ctk.CTkButton(btn_row, text="Save preset", width=100,
+                      command=self._save_preset).pack(side="left", padx=6)
+        ctk.CTkButton(btn_row, text="Load preset", width=100,
+                      command=self._load_preset).pack(side="left", padx=6)
         ctk.CTkButton(btn_row, text="Preview script", width=120,
                       command=self._preview_script).pack(side="left", padx=6)
         ctk.CTkButton(btn_row, text="Build", fg_color="green", command=self._run).pack(side="left", padx=6)
@@ -180,6 +196,20 @@ class BuildPanel(ctk.CTkFrame):
         self.ligand_param_label = ctk.CTkLabel(scroll, text="None", anchor="w")
         self.ligand_param_label.grid(row=row, column=1, padx=5, sticky="w")
         ctk.CTkButton(scroll, text="Add", width=80, command=self._add_ligand_parameters).grid(row=row, column=2, padx=5)
+        row += 1
+
+        # Hetero segments (ligands / cofactors / ions built as their own segment)
+        section_label(scroll, "Hetero segments (ligands / ions)").grid(
+            row=row, column=0, columnspan=3, sticky="w", padx=8, pady=(10, 2))
+        row += 1
+        ctk.CTkLabel(scroll, text="include as segment — needs matching topology/parameters loaded above",
+                     text_color="gray", font=ctk.CTkFont(size=11)).grid(
+            row=row, column=0, columnspan=3, sticky="w", padx=10)
+        row += 1
+        self.hetero_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        self.hetero_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=8)
+        ctk.CTkLabel(self.hetero_frame, text="Load a PDB to detect hetero residues",
+                     text_color="gray").pack(anchor="w")
         row += 1
 
         # Build options
@@ -293,6 +323,16 @@ class BuildPanel(ctk.CTkFrame):
         self.salt_entry = ctk.CTkEntry(parent, textvariable=self.salt_var, width=80)
         self.salt_entry.grid(row=1, column=1, padx=5, sticky="w")
 
+        ctk.CTkLabel(parent, text="Cation:").grid(row=2, column=0, sticky="w", padx=10, pady=4)
+        self.cation_var = tk.StringVar(value="Na+ (SOD)")
+        ctk.CTkOptionMenu(parent, variable=self.cation_var, values=list(CATION_TYPES),
+                          width=140).grid(row=2, column=1, padx=5, sticky="w")
+
+        ctk.CTkLabel(parent, text="Anion:").grid(row=3, column=0, sticky="w", padx=10, pady=4)
+        self.anion_var = tk.StringVar(value="Cl- (CLA)")
+        ctk.CTkOptionMenu(parent, variable=self.anion_var, values=list(ANION_TYPES),
+                          width=140).grid(row=3, column=1, padx=5, sticky="w")
+
     # ------------------------------------------------------------------ #
     #  PDB loading — populates all dynamic sections                        #
     # ------------------------------------------------------------------ #
@@ -303,6 +343,30 @@ class BuildPanel(ctk.CTkFrame):
         self._refresh_segments()
         self._refresh_histidines()
         self._refresh_ss_bonds()
+        self._refresh_hetero(path)
+
+    def _refresh_hetero(self, path: str):
+        for w in self.hetero_frame.winfo_children():
+            w.destroy()
+        self.hetero_rows.clear()
+
+        heteros = find_hetero_residues(path)
+        if not heteros:
+            ctk.CTkLabel(self.hetero_frame, text="No hetero residues found",
+                         text_color="gray").pack(anchor="w")
+            return
+
+        for het in heteros:
+            row = ctk.CTkFrame(self.hetero_frame, fg_color="transparent")
+            row.pack(fill="x", pady=2)
+            include_var = tk.BooleanVar(value=False)
+            ctk.CTkCheckBox(row, text="", width=24, variable=include_var).pack(side="left")
+            ctk.CTkLabel(row, text=het.label(), anchor="w", width=240).pack(side="left", padx=4)
+            ctk.CTkLabel(row, text="segname:", text_color="gray").pack(side="left", padx=(6, 2))
+            segname_var = tk.StringVar(value=het.default_segname())
+            ctk.CTkEntry(row, textvariable=segname_var, width=70).pack(side="left")
+            self.hetero_rows.append(
+                {"hetero": het, "include_var": include_var, "segname_var": segname_var})
 
     def _refresh_warnings(self):
         for w in self.warn_frame.winfo_children():
@@ -488,6 +552,16 @@ class BuildPanel(ctk.CTkFrame):
             result.append(his)
         return result
 
+    def _collect_hetero_segments(self) -> list[HeteroSegment]:
+        result = []
+        for r in self.hetero_rows:
+            if r["include_var"].get():
+                het = r["hetero"]
+                segname = r["segname_var"].get().strip() or het.default_segname()
+                result.append(HeteroSegment(segname=segname, resname=het.resname,
+                                            chain=het.chain))
+        return result
+
     def _collect_patches(self) -> list[Patch]:
         patches = []
         for r in self.ss_rows:
@@ -499,6 +573,147 @@ class BuildPanel(ctk.CTkFrame):
             if p:
                 patches.append(p)
         return patches
+
+    # ------------------------------------------------------------------ #
+    #  Summary & presets                                                   #
+    # ------------------------------------------------------------------ #
+
+    def _show_summary(self):
+        if not self.pdb_info:
+            messagebox.showinfo("Summary", "Load a PDB file first.")
+            return
+        info = self.pdb_info
+        segs = self._collect_segments()
+        het  = self._collect_hetero_segments()
+        patches = self._collect_patches()
+        lines = [
+            f"PDB: {os.path.basename(self.pdb_var.get())}",
+            f"Protein chains: {len(segs)}  ({', '.join(s.chain for s in segs)})",
+            f"Histidines: {len(self.his_rows)}",
+            f"Hetero segments to build: {len(het)}"
+            + (f"  ({', '.join(h.segname for h in het)})" if het else ""),
+            f"Patches (incl. SS): {len(patches)}",
+            f"Missing residues: {info.missing_residues} · missing atoms: {info.missing_atoms}",
+            f"Chain gaps: {len(info.chain_gaps)}",
+            "",
+            f"Box padding: {self.padding_var.get()} Å"
+            + ("  + rotate" if self.rotate_var.get() else "")
+            + ("  + recenter" if self.recenter_var.get() else ""),
+        ]
+        if self.ionize_var.get():
+            sc = self.salt_var.get()
+            lines.append(f"Ionize: neutralize"
+                         + (f" + {sc} M {self.cation_var.get()}/{self.anion_var.get()}" if sc > 0 else "")
+                         + f"  (cation {self.cation_var.get()}, anion {self.anion_var.get()})")
+        else:
+            lines.append("Ionize: off")
+        messagebox.showinfo("System summary", "\n".join(lines))
+
+    def _preset_dict(self) -> dict:
+        return {
+            "padding": self.padding_var.get(),
+            "rotate": self.rotate_var.get(),
+            "recenter": self.recenter_var.get(),
+            "ionize": self.ionize_var.get(),
+            "salt": self.salt_var.get(),
+            "cation": self.cation_var.get(),
+            "anion": self.anion_var.get(),
+            "guesscoord": self.guesscoord_var.get(),
+            "regen_angles": self.regen_angles_var.get(),
+            "regen_dihedrals": self.regen_dihedrals_var.get(),
+            "regen_resids": self.regen_resids_var.get(),
+            "segments": {r["chain"]: {"first": r["first_var"].get(),
+                                      "last": r["last_var"].get()}
+                         for r in self.segment_rows},
+            "histidines": {f'{r["his"].chain}:{r["his"].resid}': r["prot_var"].get()
+                           for r in self.his_rows},
+            "ss_disabled": [str(r["bond"]) for r in self.ss_rows
+                            if not r["enabled_var"].get()],
+            "patches": [{"name": p.name, "chain1": p.chain1, "resid1": p.resid1,
+                         "chain2": p.chain2, "resid2": p.resid2}
+                        for p in (row.to_patch() for row in self.patch_rows) if p],
+            "hetero": {f'{r["hetero"].resname}:{r["hetero"].chain}':
+                       {"include": r["include_var"].get(),
+                        "segname": r["segname_var"].get()}
+                       for r in self.hetero_rows},
+            "ligand_topology_files": self.ligand_topology_files,
+            "ligand_parameter_files": self.ligand_parameter_files,
+        }
+
+    def _save_preset(self):
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("Preset", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        with open(path, "w") as f:
+            json.dump(self._preset_dict(), f, indent=2)
+        messagebox.showinfo("Preset", f"Preset saved to:\n{path}")
+
+    def _load_preset(self):
+        path = filedialog.askopenfilename(
+            filetypes=[("Preset", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        with open(path) as f:
+            d = json.load(f)
+
+        # scalars
+        self.padding_var.set(d.get("padding", 10.0))
+        self.rotate_var.set(d.get("rotate", False))
+        self.recenter_var.set(d.get("recenter", False))
+        self.ionize_var.set(d.get("ionize", True))
+        self.salt_var.set(d.get("salt", 0.0))
+        self.cation_var.set(d.get("cation", "Na+ (SOD)"))
+        self.anion_var.set(d.get("anion", "Cl- (CLA)"))
+        self.guesscoord_var.set(d.get("guesscoord", True))
+        self.regen_angles_var.set(d.get("regen_angles", True))
+        self.regen_dihedrals_var.set(d.get("regen_dihedrals", True))
+        self.regen_resids_var.set(d.get("regen_resids", False))
+        self._toggle_salt()
+
+        # ligand files
+        self.ligand_topology_files = list(d.get("ligand_topology_files", []))
+        self.ligand_parameter_files = list(d.get("ligand_parameter_files", []))
+        self.ligand_topo_label.configure(
+            text=f"{len(self.ligand_topology_files)} file(s)" if self.ligand_topology_files else "None")
+        self.ligand_param_label.configure(
+            text=f"{len(self.ligand_parameter_files)} file(s)" if self.ligand_parameter_files else "None")
+
+        # per-residue settings (only if a PDB with matching items is loaded)
+        for r in self.segment_rows:
+            s = d.get("segments", {}).get(r["chain"])
+            if s:
+                r["first_var"].set(s.get("first", "NTER"))
+                r["last_var"].set(s.get("last", "CTER"))
+        for r in self.his_rows:
+            key = f'{r["his"].chain}:{r["his"].resid}'
+            if key in d.get("histidines", {}):
+                r["prot_var"].set(d["histidines"][key])
+        ss_disabled = set(d.get("ss_disabled", []))
+        for r in self.ss_rows:
+            r["enabled_var"].set(str(r["bond"]) not in ss_disabled)
+        for r in self.hetero_rows:
+            key = f'{r["hetero"].resname}:{r["hetero"].chain}'
+            h = d.get("hetero", {}).get(key)
+            if h:
+                r["include_var"].set(h.get("include", False))
+                r["segname_var"].set(h.get("segname", r["segname_var"].get()))
+
+        # custom patches
+        for row in list(self.patch_rows):
+            self._remove_patch_row(row)
+        for p in d.get("patches", []):
+            self._add_patch_row()
+            row = self.patch_rows[-1]
+            row.name_var.set(p.get("name", ""))
+            row.chain1_var.set(p.get("chain1", ""))
+            row.resid1_var.set(p.get("resid1", ""))
+            row.chain2_var.set(p.get("chain2", ""))
+            row.resid2_var.set(p.get("resid2", ""))
+
+        messagebox.showinfo("Preset", "Preset loaded.\n"
+                            "Load the matching PDB first for per-residue settings to apply.")
 
     def _log(self, text: str):
         self.log_box.configure(state="normal")
@@ -547,6 +762,17 @@ class BuildPanel(ctk.CTkFrame):
             messagebox.showerror("Error", "No chains detected. Load a PDB file first.")
             return None
 
+        # Parameter coverage check (warn, don't block)
+        missing = uncovered_residues(pdb, topology_files)
+        if missing:
+            shown = ", ".join(missing[:15]) + (" …" if len(missing) > 15 else "")
+            if not messagebox.askyesno(
+                    "Uncovered residues",
+                    f"These residue(s) are not defined in the loaded topologies:\n\n{shown}\n\n"
+                    "They will cause 'unknown residue' errors unless built as hetero "
+                    "segments with matching topology.\n\nContinue anyway?"):
+                return None
+
         return write_build_script(
             pdb_file=pdb,
             topology_files=topology_files,
@@ -560,6 +786,9 @@ class BuildPanel(ctk.CTkFrame):
             recenter=self.recenter_var.get(),
             ionize=self.ionize_var.get(),
             salt_concentration=self.salt_var.get(),
+            cation=CATION_TYPES.get(self.cation_var.get(), "SOD"),
+            anion=ANION_TYPES.get(self.anion_var.get(), "CLA"),
+            hetero_segments=self._collect_hetero_segments(),
             guesscoord=self.guesscoord_var.get(),
             regenerate_angles=self.regen_angles_var.get(),
             regenerate_dihedrals=self.regen_dihedrals_var.get(),

@@ -24,12 +24,16 @@ Clean up a raw PDB before building:
 1. **Build PSF** — build PSF/PDB from a local `.pdb` using `psfgen`:
    - per-chain N/C terminus patches, histidine protonation (HSD/HSE/HSP) with an RDKit-rendered legend and a 3D view of each histidine's environment,
    - disulfide bonds auto-detected from `SSBOND`, plus free-form custom patches,
+   - hetero segments: build ligands / cofactors / ions as their own psfgen segments (merged automatically),
+   - parameter coverage check (warns about residues missing from the loaded topologies),
    - warnings for ALTLOC, insertion codes, missing residues (REMARK 465), missing atoms (REMARK 470) and chain gaps,
    - `guesscoord` / `regenerate` options.
 2. **Solvate** — TIP3P water box with a given padding; optional rotate-to-minimize-volume and move-center-of-mass-to-origin.
-3. **Ionize** — neutralize the system, optionally at a set NaCl concentration.
+3. **Ionize** — neutralize the system, optionally at a set salt concentration, with a choice of cation (Na/K/Ca/Mg/Cs) and anion (Cl).
 
-Generates a Tcl script (previewable before running) and runs VMD headlessly with the log streamed live; the psfgen log is scanned for problems. Periodic cell vectors are written to `cell.txt` for the NAMD config.
+Generates a Tcl script (previewable before running) and runs VMD headlessly with the log streamed live; the psfgen log is scanned for problems. After the build the total charge and atom count are reported, and periodic cell vectors are written to `cell.txt` for the NAMD config.
+
+Extras: a **Summary** of the system before building, and **Save/Load preset** to store and reuse all build settings as JSON.
 
 ## Dependencies
 
@@ -72,12 +76,13 @@ gui/
   build_panel.py     # step-by-step build tabs
   webview_window.py  # standalone pywebview process for the 3D viewer
 core/
-  pdb_parser.py      # PDB parsing (chains, SS bonds, HIS, missing res/atoms, gaps)
+  pdb_parser.py      # PDB parsing (chains, SS bonds, HIS, hetero, missing res/atoms, gaps)
   molecule_groups.py # group splitting, chain/altLoc-aware saving
+  coverage.py        # topology parameter-coverage check
   viewer_html.py     # 3Dmol.js page generation
   his_images.py      # RDKit-rendered HSD/HSE/HSP legend
   mol2.py            # PDB → mol2 via Open Babel
-  tcl_writer.py      # Tcl generation (psfgen, solvate, autoionize, cell, recenter)
+  tcl_writer.py      # Tcl generation (psfgen, hetero segments, solvate, autoionize, cell, charge, recenter)
   vmd_runner.py      # VMD execution via subprocess
 topologies/
 parameters/

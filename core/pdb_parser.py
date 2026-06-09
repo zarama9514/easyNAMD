@@ -46,6 +46,28 @@ class SegmentConfig:
 
 
 @dataclass
+class HeteroResidue:
+    """A non-protein, non-water residue type (ligand, cofactor or ion)."""
+    resname: str
+    chain:   str
+    count:   int = 0
+
+    def label(self) -> str:
+        return f"{self.resname} (chain {self.chain}, {self.count} atoms)"
+
+    def default_segname(self) -> str:
+        return (self.resname[:3] + self.chain).upper()[:4] or "HET"
+
+
+@dataclass
+class HeteroSegment:
+    """A hetero residue chosen to be built as its own psfgen segment."""
+    segname: str
+    resname: str
+    chain:   str
+
+
+@dataclass
 class PDBInfo:
     chains:           list[str]
     ss_bonds:         list[SSBond]
@@ -60,6 +82,32 @@ class PDBInfo:
 # ------------------------------------------------------------------ #
 #  Parsers                                                             #
 # ------------------------------------------------------------------ #
+
+_STANDARD_AA = {
+    "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
+    "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
+    "HID", "HIE", "HIP", "HSD", "HSE", "HSP", "MSE",
+}
+_WATER = {"HOH", "WAT", "TIP3", "SOL", "H2O", "TIP"}
+
+
+def find_hetero_residues(pdb_file: str) -> list[HeteroResidue]:
+    """Find non-protein, non-water residue types (ligands, cofactors, ions)."""
+    found: dict[tuple, HeteroResidue] = {}
+    with open(pdb_file) as f:
+        for line in f:
+            if line[:6].strip() not in ("ATOM", "HETATM"):
+                continue
+            resname = line[17:20].strip()
+            chain   = line[21].strip() if len(line) > 21 else ""
+            if resname in _STANDARD_AA or resname in _WATER:
+                continue
+            key = (resname, chain)
+            if key not in found:
+                found[key] = HeteroResidue(resname=resname, chain=chain)
+            found[key].count += 1
+    return sorted(found.values(), key=lambda h: (h.resname, h.chain))
+
 
 def parse_pdb(pdb_file: str) -> PDBInfo:
     """Single-pass parse of a PDB file — returns all info the GUI needs."""
