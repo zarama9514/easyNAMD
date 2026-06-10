@@ -100,6 +100,7 @@ def parse_groups(pdb_file: str) -> list[MolGroup]:
 
         # Classify by residue name, not ATOM/HETATM record type — MD-frame PDBs
         # often write everything as ATOM, losing the HETATM distinction.
+        # Anything that isn't protein or water is treated as a ligand.
         if resname in PROTEIN_RESNAMES:
             key = f'protein_{chain}'
             if key not in groups:
@@ -112,16 +113,11 @@ def parse_groups(pdb_file: str) -> list[MolGroup]:
             if key not in groups:
                 groups[key] = MolGroup(
                     group_id=key, label='Water (HOH)', group_type='water')
-        elif resname in METAL_RESNAMES:
-            key = f'metal_{resname}'
-            if key not in groups:
-                groups[key] = MolGroup(
-                    group_id=key, label=f'{resname} (metal ion)', group_type='metal')
         else:
             key = f'ligand_{resname}'
             if key not in groups:
                 groups[key] = MolGroup(
-                    group_id=key, label=f'{resname} (ligand / cofactor)', group_type='ligand')
+                    group_id=key, label=f'{resname} (ligand)', group_type='ligand')
 
         g = groups[key]
         g.line_indices.append(idx)
@@ -131,13 +127,13 @@ def parse_groups(pdb_file: str) -> list[MolGroup]:
         resid = line[22:26].strip() if len(line) > 25 else ''
         group_residues.setdefault(key, set()).add((resid, line[26] if len(line) > 26 else ''))
 
-    # A "protein" chain with a single residue is almost certainly a cofactor /
-    # cap, not a protein — reclassify it as a ligand.
+    # A "protein" chain with a single residue is almost certainly a cap or a
+    # ligand, not a protein — reclassify it as a ligand.
     for key, g in groups.items():
         if g.group_type == 'protein' and len(group_residues.get(key, ())) <= 1:
             g.group_type = 'ligand'
             resn = next(iter(g.resnames), '')
-            g.label = f'{resn} (chain {g.chain}, ligand / cofactor)'
+            g.label = f'{resn} (chain {g.chain}, ligand)'
 
     return sorted(
         groups.values(),

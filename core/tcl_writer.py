@@ -79,7 +79,7 @@ def _tcl_split_chains(pdb_file: str, chains: list[str], tmp_dir: str,
 
 
 def _tcl_hetero_segment(seg: HeteroSegment, pdb_file: str) -> str:
-    """Segment block for a single hetero residue (ligand / cofactor / ion)."""
+    """Segment block for a single hetero residue (ligand / ion)."""
     return (
         f'segment {seg.segname} {{\n'
         f'    pdb "{pdb_file}"\n'

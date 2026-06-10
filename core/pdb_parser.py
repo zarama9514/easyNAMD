@@ -47,7 +47,7 @@ class SegmentConfig:
 
 @dataclass
 class HeteroResidue:
-    """A non-protein, non-water residue type (ligand, cofactor or ion)."""
+    """A non-protein, non-water residue type (ligand or ion)."""
     resname: str
     chain:   str
     count:   int = 0
@@ -95,7 +95,7 @@ _WATER = {"HOH", "WAT", "TIP3", "SOL", "H2O", "TIP"}
 
 
 def find_hetero_residues(pdb_file: str) -> list[HeteroResidue]:
-    """Find non-protein, non-water residue types (ligands, cofactors, ions)."""
+    """Find non-protein, non-water residue types (ligands, ions)."""
     found: dict[tuple, HeteroResidue] = {}
     with open(pdb_file) as f:
         for line in f:
@@ -200,7 +200,7 @@ def parse_pdb(pdb_file: str) -> PDBInfo:
                 except IndexError:
                     pass
 
-    # drop single-residue "chains" (cofactors/caps, not real protein segments)
+    # drop single-residue "chains" (caps, not real protein segments)
     chains = [c for c in chains if len(chain_residues.get(c, ())) > 1]
 
     return PDBInfo(
