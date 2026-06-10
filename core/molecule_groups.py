@@ -133,7 +133,7 @@ def parse_groups(pdb_file: str) -> list[MolGroup]:
         if g.group_type == 'protein' and len(group_residues.get(key, ())) <= 1:
             g.group_type = 'ligand'
             resn = next(iter(g.resnames), '')
-            g.label = f'{resn} (chain {g.chain}, ligand)'
+            g.label = f'{resn} (ligand)'
 
     return sorted(
         groups.values(),
