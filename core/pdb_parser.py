@@ -129,6 +129,7 @@ def parse_pdb(pdb_file: str) -> PDBInfo:
     in_remark_470             = False
     last_ca: dict[str, int]   = {}     # chain → last CA resSeq, for gap detection
     chain_gaps: list[str]     = []
+    chain_residues: dict[str, set] = {}   # chain → set of residues (for size filter)
 
     HIS_NAMES = {"HIS", "HID", "HIE", "HIP", "HSD", "HSE", "HSP"}
 
@@ -157,10 +158,14 @@ def parse_pdb(pdb_file: str) -> PDBInfo:
                 altloc = line[16]   if len(line) > 16 else " "
                 icode  = line[26]   if len(line) > 26 else " "
 
-                # chains (ATOM only, skip HETATM for segment building)
-                if record == "ATOM" and chain.strip() and chain not in seen_chains:
-                    seen_chains.add(chain)
-                    chains.append(chain)
+                # protein chains for segment building — classify by residue name
+                # (MD-frame PDBs write everything as ATOM, so record type is
+                # unreliable; only standard amino acids count as protein)
+                if resname in _STANDARD_AA and chain.strip():
+                    if chain not in seen_chains:
+                        seen_chains.add(chain)
+                        chains.append(chain)
+                    chain_residues.setdefault(chain, set()).add((resid, icode))
 
                 # residue-numbering gaps within a chain (CA atoms only)
                 if record == "ATOM" and line[12:16].strip() == "CA" and resid.lstrip("-").isdigit():
@@ -194,6 +199,9 @@ def parse_pdb(pdb_file: str) -> PDBInfo:
                     ss_bonds.append(SSBond(chain1, resid1, chain2, resid2))
                 except IndexError:
                     pass
+
+    # drop single-residue "chains" (cofactors/caps, not real protein segments)
+    chains = [c for c in chains if len(chain_residues.get(c, ())) > 1]
 
     return PDBInfo(
         chains=chains,

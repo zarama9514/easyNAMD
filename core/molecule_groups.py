@@ -1,5 +1,11 @@
 from dataclasses import dataclass, field
 
+PROTEIN_RESNAMES = frozenset({
+    'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 'ILE',
+    'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL',
+    'HID', 'HIE', 'HIP', 'HSD', 'HSE', 'HSP', 'MSE', 'CYX', 'CYM',
+})
+
 WATER_RESNAMES = frozenset({'HOH', 'WAT', 'TIP3', 'SOL', 'H2O', 'TIP'})
 
 METAL_RESNAMES = frozenset({
@@ -79,6 +85,7 @@ def find_chains(pdb_file: str) -> list[str]:
 def parse_groups(pdb_file: str) -> list[MolGroup]:
     """Parse a PDB file into selectable molecular groups."""
     groups: dict[str, MolGroup] = {}
+    group_residues: dict[str, set] = {}
 
     with open(pdb_file) as f:
         lines = f.readlines()
@@ -91,7 +98,9 @@ def parse_groups(pdb_file: str) -> list[MolGroup]:
         chain   = line[21].strip() if len(line) > 21 else ''
         resname = line[17:20].strip() if len(line) > 19 else ''
 
-        if rec == 'ATOM':
+        # Classify by residue name, not ATOM/HETATM record type — MD-frame PDBs
+        # often write everything as ATOM, losing the HETATM distinction.
+        if resname in PROTEIN_RESNAMES:
             key = f'protein_{chain}'
             if key not in groups:
                 groups[key] = MolGroup(
@@ -119,6 +128,16 @@ def parse_groups(pdb_file: str) -> list[MolGroup]:
         g.resnames.add(resname)
         if chain:
             g.chains.add(chain)
+        resid = line[22:26].strip() if len(line) > 25 else ''
+        group_residues.setdefault(key, set()).add((resid, line[26] if len(line) > 26 else ''))
+
+    # A "protein" chain with a single residue is almost certainly a cofactor /
+    # cap, not a protein — reclassify it as a ligand.
+    for key, g in groups.items():
+        if g.group_type == 'protein' and len(group_residues.get(key, ())) <= 1:
+            g.group_type = 'ligand'
+            resn = next(iter(g.resnames), '')
+            g.label = f'{resn} (chain {g.chain}, ligand / cofactor)'
 
     return sorted(
         groups.values(),
