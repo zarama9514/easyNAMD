@@ -82,17 +82,52 @@ def find_chains(pdb_file: str) -> list[str]:
     return chains
 
 
-def parse_groups(pdb_file: str) -> list[MolGroup]:
-    """Parse a PDB file into selectable molecular groups."""
+def find_models(pdb_file: str) -> list[int]:
+    """Return the MODEL ids present in the PDB (empty if it has no MODEL records)."""
+    models = []
+    with open(pdb_file) as f:
+        for line in f:
+            if line[:6].strip() == 'MODEL':
+                try:
+                    models.append(int(line[10:14]))
+                except ValueError:
+                    models.append(len(models) + 1)
+    return models
+
+
+def _line_models(lines) -> list[int]:
+    """Map each line index to its MODEL id (0 = outside any MODEL block)."""
+    mapping = []
+    cur = 0
+    for line in lines:
+        rec = line[:6].strip()
+        if rec == 'MODEL':
+            try:
+                cur = int(line[10:14])
+            except ValueError:
+                cur += 1
+        mapping.append(cur)
+        if rec == 'ENDMDL':
+            cur = 0
+    return mapping
+
+
+def parse_groups(pdb_file: str, allowed_models: set | None = None) -> list[MolGroup]:
+    """Parse a PDB file into selectable molecular groups.
+    If `allowed_models` is given, only atoms in those MODEL ids are considered."""
     groups: dict[str, MolGroup] = {}
     group_residues: dict[str, set] = {}
 
     with open(pdb_file) as f:
         lines = f.readlines()
 
+    line_model = _line_models(lines)
+
     for idx, line in enumerate(lines):
         rec = line[:6].strip()
         if rec not in ('ATOM', 'HETATM'):
+            continue
+        if allowed_models is not None and line_model[idx] not in allowed_models:
             continue
 
         chain   = line[21].strip() if len(line) > 21 else ''
@@ -278,6 +313,7 @@ def save_selected_groups(
     altloc_choices: dict[tuple, str] | None = None,
     group_chains: dict[str, str] | None = None,
     renumber: bool = True,
+    allowed_models: set | None = None,
 ):
     """Write a cleaned PDB containing only selected groups.
 
@@ -286,13 +322,16 @@ def save_selected_groups(
     - group_chains: map group_id → chain id; every atom of that group is moved
       onto the given chain.
     - renumber: rewrite atom serials sequentially from 1.
-    Non-coordinate records (HEADER, REMARK, SSBOND…) are always preserved."""
+    - allowed_models: keep only atoms from these MODEL ids (kept models are
+      merged into one — MODEL/ENDMDL records are dropped from the output).
+    Non-coordinate records (HEADER, REMARK, SSBOND…) are preserved."""
     altloc_choices = altloc_choices or {}
     group_chains   = group_chains or {}
 
     with open(pdb_file) as f:
         all_lines = f.readlines()
 
+    line_model = _line_models(all_lines)
     selected_indices: set[int] = set()
     idx_to_chain: dict[int, str] = {}
     for group in groups:
@@ -306,10 +345,14 @@ def save_selected_groups(
     with open(output_path, 'w') as out:
         for i, line in enumerate(all_lines):
             rec = line[:6].strip()
+            if rec in ('MODEL', 'ENDMDL', 'NUMMDL'):
+                continue   # collapse to a single model
             if rec not in ('ATOM', 'HETATM'):
                 out.write(line)
                 continue
             if i not in selected_indices:
+                continue
+            if allowed_models is not None and line_model[i] not in allowed_models:
                 continue
 
             altloc = line[16] if len(line) > 16 else ' '

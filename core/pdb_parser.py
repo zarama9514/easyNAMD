@@ -112,6 +112,35 @@ def find_hetero_residues(pdb_file: str) -> list[HeteroResidue]:
     return sorted(found.values(), key=lambda h: (h.resname, h.chain))
 
 
+def find_disulfides_by_distance(pdb_file: str, cutoff: float = 2.5) -> list[SSBond]:
+    """Find CYS–CYS disulfide bonds by SG–SG distance (S–S bond ≈ 2.05 Å).
+    Needed for MD-frame PDBs that carry no SSBOND header records."""
+    sgs = []   # (chain, resid, xyz)
+    with open(pdb_file) as f:
+        for line in f:
+            if line[:6].strip() not in ("ATOM", "HETATM"):
+                continue
+            if line[17:20].strip() != "CYS" or line[12:16].strip() != "SG":
+                continue
+            try:
+                xyz = (float(line[30:38]), float(line[38:46]), float(line[46:54]))
+            except ValueError:
+                continue
+            chain = line[21].strip() if len(line) > 21 else ""
+            resid = line[22:26].strip() if len(line) > 25 else ""
+            sgs.append((chain, resid, xyz))
+
+    bonds = []
+    c2 = cutoff ** 2
+    for i in range(len(sgs)):
+        for j in range(i + 1, len(sgs)):
+            a, b = sgs[i], sgs[j]
+            d2 = sum((a[2][k] - b[2][k]) ** 2 for k in range(3))
+            if d2 <= c2:
+                bonds.append(SSBond(a[0], a[1], b[0], b[1]))
+    return bonds
+
+
 def parse_pdb(pdb_file: str) -> PDBInfo:
     """Single-pass parse of a PDB file — returns all info the GUI needs."""
     chains: list[str]         = []

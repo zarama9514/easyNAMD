@@ -11,7 +11,7 @@ import json
 
 from core.pdb_parser import (
     HeteroResidue, HeteroSegment, HisResidue, Patch, PDBInfo, SegmentConfig,
-    find_hetero_residues, parse_pdb,
+    find_disulfides_by_distance, find_hetero_residues, parse_pdb,
 )
 from core.coverage import uncovered_built_residues
 from core.zinc import detect_zinc_coordination
@@ -97,6 +97,7 @@ class BuildPanel(ctk.CTkFrame):
         self._auto_patch_rows: list[PatchRow] = []   # auto CYSD rows from Zn detection
         self._zn_cys: list = []
         self._zn_his: list = []
+        self._ss_by_distance: list = []
         self.ligand_topology_files:  list[str] = []
         self.ligand_parameter_files: list[str] = []
         self._problems: list[str] = []
@@ -361,6 +362,7 @@ class BuildPanel(ctk.CTkFrame):
 
     def _load_pdb(self, path: str):
         self.pdb_info = parse_pdb(path)
+        self._ss_by_distance = find_disulfides_by_distance(path)
         self._zn_cys, self._zn_his = detect_zinc_coordination(path)
         self._refresh_warnings()
         self._refresh_segments()
@@ -521,13 +523,29 @@ class BuildPanel(ctk.CTkFrame):
             w.destroy()
         self.ss_rows.clear()
 
-        if not self.pdb_info.ss_bonds:
+        # Combine SSBOND header records with distance-detected bridges (the
+        # latter is essential for MD-frame PDBs that have no SSBOND records).
+        seen = set()
+        bonds = []
+        for bond in list(self.pdb_info.ss_bonds) + self._ss_by_distance:
+            key = frozenset({(bond.chain1, bond.resid1), (bond.chain2, bond.resid2)})
+            if key not in seen:
+                seen.add(key)
+                bonds.append(bond)
+
+        if not bonds:
             ctk.CTkLabel(self.ss_frame, text="No SS bonds found", text_color="gray").pack(anchor="w")
             return
 
-        for bond in self.pdb_info.ss_bonds:
+        header_keys = {
+            frozenset({(b.chain1, b.resid1), (b.chain2, b.resid2)})
+            for b in self.pdb_info.ss_bonds
+        }
+        for bond in bonds:
             var = tk.BooleanVar(value=True)
-            ctk.CTkCheckBox(self.ss_frame, text=str(bond), variable=var).pack(anchor="w", pady=2)
+            key = frozenset({(bond.chain1, bond.resid1), (bond.chain2, bond.resid2)})
+            tag = "" if key in header_keys else "   (by distance)"
+            ctk.CTkCheckBox(self.ss_frame, text=str(bond) + tag, variable=var).pack(anchor="w", pady=2)
             self.ss_rows.append({"bond": bond, "enabled_var": var})
 
     # ------------------------------------------------------------------ #
@@ -798,6 +816,17 @@ class BuildPanel(ctk.CTkFrame):
     )
 
     def _scan_for_problems(self, line: str):
+        # capture final metrics
+        if "total charge =" in line:
+            try:
+                self._charge = float(line.split("=")[-1].strip())
+            except ValueError:
+                pass
+        elif "atom count =" in line:
+            try:
+                self._atoms = int(line.split("=")[-1].strip())
+            except ValueError:
+                pass
         low = line.lower()
         for pat in self._PROBLEM_PATTERNS:
             if pat.lower() in low:
@@ -915,6 +944,8 @@ class BuildPanel(ctk.CTkFrame):
             return
 
         self._problems = []
+        self._charge = None
+        self._atoms = None
         self.log_box.configure(state="normal")
         self.log_box.delete("1.0", "end")
         self.log_box.configure(state="disabled")
@@ -934,16 +965,57 @@ class BuildPanel(ctk.CTkFrame):
             self._log("\nBuild failed. Check the log above.")
             messagebox.showerror("Failed", "VMD exited with an error.")
             return
+        self._log("\nBuild complete.")
+        self._show_sanity_check(problems)
 
-        if problems:
-            preview = "\n".join(f"  • {p}" for p in problems[:12])
-            more = f"\n…and {len(problems) - 12} more" if len(problems) > 12 else ""
-            self._log(f"\nBuild finished with {len(problems)} warning(s):\n{preview}{more}")
-            messagebox.showwarning(
-                "Build finished with warnings",
-                f"{len(problems)} potential problem(s) detected in the psfgen log.\n"
-                "Review the log — coordinates may have been guessed or residues skipped.",
-            )
-        else:
-            self._log("\nBuild complete — no problems detected.")
-            messagebox.showinfo("Done", "Structure built successfully.")
+    def _show_sanity_check(self, problems: list[str]):
+        """Pop a window summarising whether the built system looks OK."""
+        outdir = self.outdir_var.get().strip()
+        final = "ionized" if self.ionize_var.get() else "solvated"
+        psf = os.path.join(outdir, final + ".psf")
+        pdb = os.path.join(outdir, final + ".pdb")
+
+        charge = getattr(self, "_charge", None)
+        atoms  = getattr(self, "_atoms", None)
+
+        checks = []   # (ok, text)
+        checks.append((os.path.isfile(psf) and os.path.isfile(pdb),
+                       f"Output files written ({final}.psf / .pdb)"))
+        if charge is not None:
+            checks.append((abs(charge) < 0.01,
+                           f"Net charge ≈ {charge:+.3f} e  (should be ~0)"))
+        if atoms is not None:
+            checks.append((atoms > 0, f"Atom count: {atoms}"))
+        checks.append((not problems,
+                       f"psfgen log: {len(problems)} warning(s)"
+                       + (" — review log" if problems else "")))
+        if self.pdb_info:
+            mr, ma = self.pdb_info.missing_residues, self.pdb_info.missing_atoms
+            if mr or ma:
+                checks.append((False,
+                               f"Source had {mr} missing residue(s), {ma} with missing atoms "
+                               "(coordinates guessed)"))
+
+        all_ok = all(ok for ok, _ in checks)
+
+        win = ctk.CTkToplevel(self)
+        win.title("System sanity check")
+        win.geometry("520x340")
+        win.transient(self.winfo_toplevel())
+
+        header = "✅  System looks OK" if all_ok else "⚠️  Check the items below"
+        ctk.CTkLabel(win, text=header, font=ctk.CTkFont(size=16, weight="bold"),
+                     text_color=("#2faa4f" if all_ok else "orange")).pack(anchor="w", padx=16, pady=(14, 8))
+
+        for ok, text in checks:
+            row = ctk.CTkFrame(win, fg_color="transparent")
+            row.pack(fill="x", padx=16, pady=2)
+            ctk.CTkLabel(row, text="✓" if ok else "✗", width=20,
+                         text_color=("#2faa4f" if ok else "#dd5555"),
+                         font=ctk.CTkFont(weight="bold")).pack(side="left")
+            ctk.CTkLabel(row, text=text, anchor="w", justify="left").pack(side="left", padx=4)
+
+        ctk.CTkLabel(win, text=f"Output: {outdir}", text_color="gray",
+                     font=ctk.CTkFont(size=11)).pack(anchor="w", padx=16, pady=(10, 0))
+        ctk.CTkButton(win, text="OK", width=90, command=win.destroy).pack(pady=14)
+        win.after(100, win.lift)

@@ -9,7 +9,7 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 from core.molecule_groups import (
-    AltLocResidue, MolGroup, build_focus_scene_pdb, find_altlocs,
+    AltLocResidue, MolGroup, build_focus_scene_pdb, find_altlocs, find_models,
     parse_groups, save_selected_groups, write_group_pdb,
 )
 from core.mol2 import pdb_to_mol2
@@ -85,6 +85,8 @@ class PreparePanel(ctk.CTkFrame):
         self._selection_file: str | None = None
         self._command_file:   str | None = None
         self._cmd_counter:    int = 0
+        self._models: list[int] = []
+        self._model_vars: dict[int, tk.BooleanVar] = {}
 
         self._build_ui()
 
@@ -115,10 +117,19 @@ class PreparePanel(ctk.CTkFrame):
                      text_color='gray').pack(anchor='w', padx=8, pady=8)
         ctk.CTkButton(left, text='Show in 3D', command=self._show_in_3d).pack(pady=6)
 
-        # ── Right column: alternative locations ───────────────────────── #
+        # ── Right column: models + alternative locations ──────────────── #
         right = ctk.CTkFrame(body, width=280)
         right.pack(side='right', fill='y', padx=(8, 0))
         right.pack_propagate(False)
+
+        ctk.CTkLabel(right, text='Models',
+                     font=ctk.CTkFont(weight='bold')).pack(anchor='w', padx=8, pady=(8, 0))
+        ctk.CTkLabel(right, text='tick to keep; keeping several merges them into one system',
+                     text_color='gray', font=ctk.CTkFont(size=11)).pack(anchor='w', padx=8)
+        self._models_frame = ctk.CTkFrame(right, fg_color='transparent')
+        self._models_frame.pack(fill='x', padx=4, pady=2)
+        ctk.CTkLabel(self._models_frame, text='single model',
+                     text_color='gray').pack(anchor='w', padx=8)
 
         alt_header = ctk.CTkFrame(right, fg_color='transparent')
         alt_header.pack(fill='x', padx=8, pady=(10, 2))
@@ -331,10 +342,36 @@ class PreparePanel(ctk.CTkFrame):
         self._pdb_var.set(path)
         base, _ = os.path.splitext(path)
         self._outpath_var.set(base + '_clean.pdb')
-        self._groups = parse_groups(path)
-        self._altlocs = find_altlocs(path)
+        self._models = find_models(path)
+        self._populate_models()
+        self._reparse()
+
+    def _reparse(self):
+        """(Re)parse groups/altlocs respecting the current model selection."""
+        allowed = self._selected_models()
+        self._groups = parse_groups(self._pdb_file, allowed_models=allowed)
+        self._altlocs = find_altlocs(self._pdb_file)
         self._populate_list()
         self._populate_altlocs()
+
+    def _populate_models(self):
+        for w in self._models_frame.winfo_children():
+            w.destroy()
+        self._model_vars.clear()
+        if len(self._models) <= 1:
+            ctk.CTkLabel(self._models_frame, text='single model',
+                         text_color='gray').pack(anchor='w', padx=8)
+            return
+        for m in self._models:
+            var = tk.BooleanVar(value=True)   # keep all by default (= aggregate)
+            ctk.CTkCheckBox(self._models_frame, text=f'Model {m}', variable=var,
+                            command=self._reparse).pack(anchor='w', padx=8, pady=1)
+            self._model_vars[m] = var
+
+    def _selected_models(self) -> set | None:
+        if not self._model_vars:
+            return None
+        return {m for m, v in self._model_vars.items() if v.get()}
 
     def _browse_output(self):
         path = filedialog.asksaveasfilename(
@@ -359,7 +396,8 @@ class PreparePanel(ctk.CTkFrame):
         save_selected_groups(self._pdb_file, self._groups, selected, outpath,
                              altloc_choices=self._altloc_choices(),
                              group_chains=self._group_chains(),
-                             renumber=True)
+                             renumber=True,
+                             allowed_models=self._selected_models())
 
         if self._on_saved and messagebox.askyesno(
                 'Saved', f'Cleaned PDB saved to:\n{outpath}\n\nUse it in the Build tab?'):
