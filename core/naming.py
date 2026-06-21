@@ -31,5 +31,11 @@ def root_name(path: str) -> str:
 
 
 def structure_dir(path: str) -> str:
-    """Folder for this structure: <dir of input>/<root>."""
-    return os.path.join(os.path.dirname(os.path.abspath(path)), root_name(path))
+    """Folder for this structure: <dir of input>/<root>.
+    If the file already sits in a folder named after the root (e.g. a cleaned
+    PDB inside its structure folder), reuse that folder instead of nesting."""
+    parent = os.path.dirname(os.path.abspath(path))
+    root = root_name(path)
+    if os.path.basename(parent) == root:
+        return parent
+    return os.path.join(parent, root)
