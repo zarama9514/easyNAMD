@@ -15,6 +15,7 @@ from core.pdb_parser import (
 )
 from core.coverage import uncovered_built_residues
 from core.zinc import detect_zinc_coordination
+from core.naming import stem as file_stem, structure_dir
 from core.tcl_writer import write_build_script
 from core.vmd_runner import run_vmd
 from core.viewer_html import build_residue_focus_html
@@ -285,8 +286,7 @@ class BuildPanel(ctk.CTkFrame):
         if not os.path.isfile(path):
             return
         self.pdb_var.set(path)
-        if not self.outdir_var.get().strip():
-            self.outdir_var.set(os.path.dirname(path))
+        self.outdir_var.set(structure_dir(path))   # <input dir>/<root>
         self._load_pdb(path)
 
     def _build_his_legend(self, parent, row):
@@ -556,6 +556,7 @@ class BuildPanel(ctk.CTkFrame):
         path = filedialog.askopenfilename(filetypes=[("PDB files", "*.pdb"), ("All files", "*.*")])
         if path:
             self.pdb_var.set(path)
+            self.outdir_var.set(structure_dir(path))   # <input dir>/<root>
             self._load_pdb(path)
 
     def _browse_outdir(self):
@@ -911,6 +912,7 @@ class BuildPanel(ctk.CTkFrame):
             regenerate_angles=self.regen_angles_var.get(),
             regenerate_dihedrals=self.regen_dihedrals_var.get(),
             regenerate_resids=self.regen_resids_var.get(),
+            base_stem=file_stem(pdb),
         )
 
     def _preview_script(self):
@@ -934,6 +936,10 @@ class BuildPanel(ctk.CTkFrame):
             self._log("\nERROR while preparing build:\n" + traceback.format_exc())
 
     def _run_impl(self):
+        if getattr(self, "_building", False):
+            messagebox.showinfo("Build", "A build is already running — please wait.")
+            return
+
         vmd = self.config.get("vmd_path", "").strip()
         if not vmd or not os.path.isfile(vmd):
             messagebox.showerror("Error", "VMD binary not found. Check Settings.")
@@ -943,6 +949,7 @@ class BuildPanel(ctk.CTkFrame):
         if not script:
             return
 
+        self._building = True
         self._problems = []
         self._charge = None
         self._atoms = None
@@ -960,6 +967,7 @@ class BuildPanel(ctk.CTkFrame):
         )
 
     def _on_done(self, success: bool):
+        self._building = False
         problems = getattr(self, "_problems", [])
         if not success:
             self._log("\nBuild failed. Check the log above.")
@@ -971,7 +979,8 @@ class BuildPanel(ctk.CTkFrame):
     def _show_sanity_check(self, problems: list[str]):
         """Pop a window summarising whether the built system looks OK."""
         outdir = self.outdir_var.get().strip()
-        final = "ionized" if self.ionize_var.get() else "solvated"
+        stem = file_stem(self.pdb_var.get())
+        final = stem + ("_solvated_ionized" if self.ionize_var.get() else "_solvated")
         psf = os.path.join(outdir, final + ".psf")
         pdb = os.path.join(outdir, final + ".pdb")
 

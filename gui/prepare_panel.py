@@ -13,6 +13,7 @@ from core.molecule_groups import (
     parse_groups, save_selected_groups, write_group_pdb,
 )
 from core.mol2 import pdb_to_mol2
+from core.naming import stem as file_stem, structure_dir
 from core.viewer_html import build_viewer_html
 
 ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -340,8 +341,9 @@ class PreparePanel(ctk.CTkFrame):
             return
         self._pdb_file = path
         self._pdb_var.set(path)
-        base, _ = os.path.splitext(path)
-        self._outpath_var.set(base + '_clean.pdb')
+        # output goes into <input dir>/<root>/<stem>_clean.pdb
+        self._outpath_var.set(os.path.join(structure_dir(path),
+                                           file_stem(path) + '_clean.pdb'))
         self._models = find_models(path)
         self._populate_models()
         self._reparse()

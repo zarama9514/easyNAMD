@@ -194,6 +194,7 @@ def tcl_build_psf(
     parts = [
         "# --- Build PSF ---",
         "package require psfgen",
+        "resetpsf",
         "",
         "# Topologies",
         topology_lines,
@@ -343,16 +344,18 @@ def write_build_script(
     regenerate_angles: bool = True,
     regenerate_dihedrals: bool = True,
     regenerate_resids: bool = False,
+    base_stem: str = "structure",
 ) -> str:
-    """Assemble all Tcl blocks into a single build script.
-    Returns the path to the written script."""
+    """Assemble all Tcl blocks into a single build script. Output files inherit
+    `base_stem` (e.g. name_clean → name_clean.psf, name_clean_solvated.*,
+    name_clean_solvated_ionized.*). Returns the path to the written script."""
     hetero_segments = hetero_segments or []
 
     os.makedirs(output_dir, exist_ok=True)
 
-    psf_prefix      = os.path.join(output_dir, "structure")
-    solvated_prefix = os.path.join(output_dir, "solvated")
-    ionized_prefix  = os.path.join(output_dir, "ionized")
+    psf_prefix      = os.path.join(output_dir, base_stem)
+    solvated_prefix = os.path.join(output_dir, base_stem + "_solvated")
+    ionized_prefix  = os.path.join(output_dir, base_stem + "_solvated_ionized")
     final_prefix    = ionized_prefix if ionize else solvated_prefix
 
     blocks = [
@@ -387,7 +390,7 @@ def write_build_script(
     if recenter:
         blocks += ["", tcl_recenter(final_prefix)]
 
-    cell_file = os.path.join(output_dir, "cell.txt")
+    cell_file = final_prefix + "_cell.txt"
     blocks += ["", tcl_write_cell(final_prefix, cell_file)]
     blocks += ["", tcl_summary(final_prefix)]
 
@@ -398,7 +401,7 @@ def write_build_script(
         "quit",
     ]
 
-    script_path = os.path.join(output_dir, "build.tcl")
+    script_path = os.path.join(output_dir, base_stem + "_build.tcl")
     with open(script_path, "w") as f:
         f.write("\n".join(blocks))
 

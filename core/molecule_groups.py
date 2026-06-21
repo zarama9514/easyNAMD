@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass, field
 
 PROTEIN_RESNAMES = frozenset({
@@ -330,6 +331,10 @@ def save_selected_groups(
 
     with open(pdb_file) as f:
         all_lines = f.readlines()
+
+    out_dir = os.path.dirname(output_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
 
     line_model = _line_models(all_lines)
     selected_indices: set[int] = set()
