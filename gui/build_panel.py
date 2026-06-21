@@ -84,9 +84,10 @@ class PatchRow(ctk.CTkFrame):
 
 
 class BuildPanel(ctk.CTkFrame):
-    def __init__(self, parent, config: dict):
+    def __init__(self, parent, config: dict, on_build_success=None):
         super().__init__(parent)
         self.config = config
+        self._on_build_success = on_build_success
         self.pdb_info: PDBInfo | None = None
 
         # dynamic widget state
@@ -288,6 +289,22 @@ class BuildPanel(ctk.CTkFrame):
         self.pdb_var.set(path)
         self.outdir_var.set(structure_dir(path))   # <input dir>/<root>
         self._load_pdb(path)
+
+    def current_namd_system(self) -> dict | None:
+        """Return the final Build output paths for the Simulate tab."""
+        pdb = self.pdb_var.get().strip()
+        outdir = self.outdir_var.get().strip()
+        if not pdb or not outdir:
+            return None
+        stem = file_stem(pdb)
+        final = stem + ("_solvated_ionized" if self.ionize_var.get() else "_solvated")
+        return {
+            "psf": os.path.join(outdir, final + ".psf"),
+            "pdb": os.path.join(outdir, final + ".pdb"),
+            "cell": os.path.join(outdir, final + "_cell.txt"),
+            "outdir": outdir,
+            "parameters": self._collect_parameter_files(),
+        }
 
     def _build_his_legend(self, parent, row):
         """Show HSD/HSE/HSP structures (rendered by RDKit) as a quick reference."""
@@ -975,6 +992,8 @@ class BuildPanel(ctk.CTkFrame):
             return
         self._log("\nBuild complete.")
         self._show_sanity_check(problems)
+        if self._on_build_success:
+            self._on_build_success(self.current_namd_system())
 
     def _show_sanity_check(self, problems: list[str]):
         """Pop a window summarising whether the built system looks OK."""
