@@ -293,13 +293,15 @@ def tcl_ionize(in_prefix: str, out_prefix: str, salt_concentration: float = 0.0,
                cation: str = "SOD", anion: str = "CLA") -> str:
     """Return a Tcl block that neutralizes the system and optionally sets salt
     concentration, using the given ion types (CHARMM resnames)."""
-    salt_flag = f"-sc {salt_concentration} " if salt_concentration > 0.0 else ""
+    # -neutralize and -sc are mutually exclusive ion-placement modes in
+    # autoionize (-sc already neutralizes). Pick one.
+    mode = f"-sc {salt_concentration}" if salt_concentration > 0.0 else "-neutralize"
     return "\n".join([
         "# --- Ionize ---",
         "package require autoionize",
         f'mol load psf "{in_prefix}.psf" pdb "{in_prefix}.pdb"',
         f'autoionize -psf "{in_prefix}.psf" -pdb "{in_prefix}.pdb" \\',
-        f'    -neutralize {salt_flag}-cation {cation} -anion {anion} \\',
+        f'    {mode} -cation {cation} -anion {anion} \\',
         f'    -o "{out_prefix}"',
         "mol delete all",
     ])
