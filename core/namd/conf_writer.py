@@ -101,6 +101,10 @@ def stage_conf_text(
         f"stepspercycle       {ff.steps_per_cycle}",
         f"pairlistsPerCycle   {ff.pairlists_per_cycle}",
         "",
+        "# NAMD 3 GPU-resident mode",
+        f"CUDASOAintegrate    {_cuda_soa_value(ff.cuda_soa_integrate, stage)}",
+        *([f"DeviceMigration     {ff.device_migration}"] if ff.device_migration != "off" else []),
+        "",
         "# Nonbonded interactions",
         f"exclude             {ff.exclude}",
         f"1-4scaling          {ff.one_four_scaling:g}",
@@ -117,12 +121,13 @@ def stage_conf_text(
     if pme.enabled:
         lines.append(f"PMEGridSpacing      {pme.grid_spacing:g}")
 
+    temperature_control = _uses_temperature_control(stage)
     lines += [
         "",
         "# Temperature control",
-        f"langevin            {_on(langevin.enabled and stage.ensemble in ('NVT', 'NPT'))}",
+        f"langevin            {_on(langevin.enabled and temperature_control)}",
     ]
-    if langevin.enabled and stage.ensemble in ("NVT", "NPT"):
+    if langevin.enabled and temperature_control:
         lines += [
             f"langevinDamping     {langevin.damping:g}",
             f"langevinTemp        {stage.temperature:g}",
@@ -139,18 +144,22 @@ def stage_conf_text(
             f"reassignHold        {stage.ramp_end:g}",
         ]
 
+    pressure = _pressure_settings(system, stage)
+
     lines += ["", "# Pressure control"]
-    if stage.ensemble == "NPT":
+    if pressure["enabled"]:
         lines += [
             "langevinPiston      on",
             f"langevinPistonTarget {stage.pressure:g}",
             f"langevinPistonPeriod {barostat.piston_period:g}",
             f"langevinPistonDecay {barostat.piston_decay:g}",
             f"langevinPistonTemp  {stage.temperature:g}",
-            f"useGroupPressure    {_on(barostat.use_group_pressure)}",
-            f"useFlexibleCell     {_on(barostat.use_flexible_cell)}",
-            f"useConstantArea     {_on(barostat.use_constant_area)}",
+            f"useGroupPressure    {_on(pressure['use_group_pressure'])}",
+            f"useFlexibleCell     {_on(pressure['use_flexible_cell'])}",
+            f"useConstantArea     {_on(pressure['use_constant_area'])}",
         ]
+        if pressure["mode"] == "surface_tension":
+            lines.append(f"surfaceTensionTarget {pressure['surface_tension_target']:g}")
     else:
         lines.append("langevinPiston      off")
 
@@ -209,3 +218,76 @@ def stage_conf_text(
 
 def _on(value: bool) -> str:
     return "on" if value else "off"
+
+
+def _cuda_soa_value(mode: str, stage: Stage) -> str:
+    mode = (mode or "auto").lower()
+    if mode in ("on", "off"):
+        return mode
+    if stage.stage_type == "minimize":
+        return "off"
+    return "on"
+
+
+def _uses_temperature_control(stage: Stage) -> bool:
+    return stage.stage_type == "md" and stage.ensemble in ("NVT", "NPT", "NPAT", "NPgT")
+
+
+def _pressure_settings(system: SystemConfig, stage: Stage) -> dict[str, bool | float | str]:
+    mode = (stage.pressure_control.mode or "auto").lower()
+    use_global_defaults = mode == "auto"
+    if stage.stage_type != "md" or stage.ensemble in ("NVE", "NVT"):
+        mode = "off"
+    if mode == "auto":
+        mode = _legacy_pressure_mode(system, stage)
+
+    enabled = mode in ("isotropic", "semiisotropic", "npat", "surface_tension")
+    use_group_pressure = (
+        system.barostat.use_group_pressure
+        if use_global_defaults else stage.pressure_control.use_group_pressure
+    )
+    use_flexible_cell = (
+        system.barostat.use_flexible_cell
+        if use_global_defaults else stage.pressure_control.use_flexible_cell
+    )
+    use_constant_area = (
+        system.barostat.use_constant_area
+        if use_global_defaults else stage.pressure_control.use_constant_area
+    )
+    surface_tension_target = stage.pressure_control.surface_tension_target
+    if surface_tension_target == 0.0:
+        surface_tension_target = system.barostat.surface_tension_target
+
+    if mode == "isotropic":
+        use_flexible_cell = False
+        use_constant_area = False
+    elif mode == "semiisotropic":
+        use_flexible_cell = True
+        use_constant_area = False
+    elif mode == "npat":
+        use_flexible_cell = False
+        use_constant_area = True
+    elif mode == "surface_tension":
+        use_flexible_cell = True
+        use_constant_area = False
+
+    return {
+        "mode": mode,
+        "enabled": enabled,
+        "use_group_pressure": use_group_pressure,
+        "use_flexible_cell": use_flexible_cell,
+        "use_constant_area": use_constant_area,
+        "surface_tension_target": surface_tension_target,
+    }
+
+
+def _legacy_pressure_mode(system: SystemConfig, stage: Stage) -> str:
+    if stage.ensemble == "NPAT":
+        return "npat"
+    if stage.ensemble == "NPgT":
+        return "surface_tension"
+    if stage.ensemble == "NPT" and system.system_type == "membrane":
+        return "semiisotropic"
+    if stage.ensemble == "NPT":
+        return "isotropic"
+    return "off"

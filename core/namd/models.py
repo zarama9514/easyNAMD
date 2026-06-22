@@ -36,6 +36,8 @@ class ForceFieldConfig:
     wrap_nearest: bool = True
     binary_output: bool = True
     binary_restart: bool = True
+    cuda_soa_integrate: str = "auto"  # auto | on | off
+    device_migration: str = "off"     # off | on
 
 
 @dataclass
@@ -56,9 +58,30 @@ class BarostatConfig:
     target_pressure: float = 1.01325
     piston_period: float = 50.0
     piston_decay: float = 25.0
+    surface_tension_target: float = 0.0
     use_group_pressure: bool = True
     use_flexible_cell: bool = False
     use_constant_area: bool = False
+
+
+@dataclass
+class PressureControlConfig:
+    """Per-stage pressure coupling intent.
+
+    mode:
+      auto              backward-compatible ensemble-derived behavior
+      off               no Langevin piston
+      isotropic         standard NPT
+      semiisotropic     flexible XY/Z cell, typical membrane NPT
+      npat              constant membrane area
+      surface_tension   flexible cell with surfaceTensionTarget
+    """
+
+    mode: str = "auto"
+    use_group_pressure: bool = True
+    use_flexible_cell: bool = False
+    use_constant_area: bool = False
+    surface_tension_target: float = 0.0
 
 
 @dataclass
@@ -89,7 +112,7 @@ class RestraintConfig:
 class Stage:
     name: str
     stage_type: str = "md"          # minimize | md
-    ensemble: str = "NPT"           # NVE | NVT | NPT
+    ensemble: str = "NPT"           # NVE | NVT | NPT | NPAT | NPgT
     enabled: bool = True
     steps: int = 250000
     duration_value: float = 0.5
@@ -103,6 +126,7 @@ class Stage:
     ramp_end: float = 310.0
     ramp_increment: float = 5.0
     ramp_freq: int = 1000
+    pressure_control: PressureControlConfig = field(default_factory=PressureControlConfig)
     restraints: RestraintConfig = field(default_factory=RestraintConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     custom_lines: list[str] = field(default_factory=list)
@@ -141,26 +165,6 @@ class Stage:
 
 
 @dataclass
-class SlurmConfig:
-    profile: str = "slurm_cpu"      # slurm_cpu | slurm_gpu | custom
-    job_name: str = "easynamd"
-    partition: str = ""
-    account: str = ""
-    nodes: int = 1
-    ntasks: int = 1
-    cpus_per_task: int = 16
-    time: str = "24:00:00"
-    modules: list[str] = field(default_factory=lambda: ["module load namd"])
-    command: str = "namd3"
-    use_srun: bool = True
-    set_cpu_affinity: bool = False
-    gpu_devices: str = ""           # e.g. 0 or 0,1; exported as +devices
-    gpus_per_node: int = 0
-    extra_namd_args: str = ""
-    extra_sbatch: list[str] = field(default_factory=list)
-
-
-@dataclass
 class SystemConfig:
     psf: str = ""
     pdb: str = ""
@@ -168,8 +172,7 @@ class SystemConfig:
     parameter_files: list[str] = field(default_factory=list)
     output_dir: str = ""
     stem: str = "system"
-    namd_command: str = "namd3"
-    cpu_count: int = 16
+    system_type: str = "soluble"    # soluble | membrane | ligand
     start_mode: str = "initial"     # initial | restart
     restart_prefix: str = ""        # prefix without .restart.coor/.vel/.xsc
     first_timestep: int = 0
@@ -187,6 +190,8 @@ def dataclass_from_dict(cls, data: dict[str, Any]):
     """Small recursive loader for our dataclass tree."""
     if cls is Stage:
         data = dict(data)
+        data["pressure_control"] = dataclass_from_dict(
+            PressureControlConfig, data.get("pressure_control", {}))
         data["restraints"] = dataclass_from_dict(
             RestraintConfig, data.get("restraints", {}))
         data["output"] = dataclass_from_dict(OutputConfig, data.get("output", {}))

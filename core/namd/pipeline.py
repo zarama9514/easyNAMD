@@ -4,7 +4,14 @@ import json
 from copy import deepcopy
 from dataclasses import dataclass, field
 
-from core.namd.models import OutputConfig, RestraintConfig, Stage, dataclass_from_dict
+from core.namd.models import (
+    OutputConfig,
+    PressureControlConfig,
+    RestraintConfig,
+    Stage,
+    dataclass_from_dict,
+    to_dict,
+)
 
 
 @dataclass
@@ -48,10 +55,7 @@ class Pipeline:
         return {
             "version": 1,
             "name": self.name,
-            "stages": [s.__dict__ | {
-                "restraints": s.restraints.__dict__,
-                "output": s.output.__dict__,
-            } for s in self.stages],
+            "stages": [to_dict(stage) for stage in self.stages],
         }
 
     @classmethod
@@ -84,9 +88,38 @@ def _out() -> OutputConfig:
     return OutputConfig()
 
 
+def pressure_mode_for_ensemble(ensemble: str, system_type: str = "soluble") -> str:
+    if ensemble in ("NVE", "NVT"):
+        return "off"
+    if ensemble == "NPAT":
+        return "npat"
+    if ensemble == "NPgT":
+        return "surface_tension"
+    if ensemble == "NPT" and system_type == "membrane":
+        return "semiisotropic"
+    if ensemble == "NPT":
+        return "isotropic"
+    return "auto"
+
+
+def pressure_control_for_ensemble(
+    ensemble: str,
+    system_type: str = "soluble",
+) -> PressureControlConfig:
+    mode = pressure_mode_for_ensemble(ensemble, system_type)
+    return PressureControlConfig(
+        mode=mode,
+        use_group_pressure=True,
+        use_flexible_cell=mode in ("semiisotropic", "surface_tension"),
+        use_constant_area=mode == "npat",
+    )
+
+
 def _md_stage(name: str, ensemble: str, ns: float, k: float = 0.0,
               temperature: float = 310.0, chunks: int = 1,
-              ramp: bool = False) -> Stage:
+              ramp: bool = False,
+              selection: str = "protein and backbone",
+              system_type: str = "soluble") -> Stage:
     stage = Stage(
         name=name,
         stage_type="md",
@@ -98,7 +131,8 @@ def _md_stage(name: str, ensemble: str, ns: float, k: float = 0.0,
         temperature_ramp=ramp,
         ramp_start=0.0,
         ramp_end=temperature,
-        restraints=_restraint(k),
+        pressure_control=pressure_control_for_ensemble(ensemble, system_type),
+        restraints=_restraint(k, selection),
         output=_out(),
         chunk_count=chunks,
     )
@@ -171,6 +205,57 @@ def chunked_production_pipeline() -> Pipeline:
     )
 
 
+def membrane_relax_pipeline() -> Pipeline:
+    return Pipeline(
+        name="Membrane gentle relax",
+        stages=[
+            Stage(
+                name="minimize_membrane",
+                stage_type="minimize",
+                ensemble="NVT",
+                minimize_steps=20000,
+                restraints=_restraint(10.0, "protein and backbone"),
+                output=_out(),
+            ),
+            _md_stage("heat_nvt", "NVT", ns=0.25, k=10.0, ramp=True),
+            _md_stage("eq_npat_k10", "NPAT", ns=0.5, k=10.0, system_type="membrane"),
+            _md_stage("eq_npat_k5", "NPAT", ns=0.5, k=5.0, system_type="membrane"),
+            _md_stage("eq_semiiso_npt_k2", "NPT", ns=1.0, k=2.0, system_type="membrane"),
+            _md_stage("eq_semiiso_npt_free", "NPT", ns=1.0, k=0.0, system_type="membrane"),
+            _md_stage("production_semiiso_npt", "NPT", ns=20.0, k=0.0, system_type="membrane"),
+        ],
+    )
+
+
+def membrane_surface_tension_pipeline() -> Pipeline:
+    return Pipeline(
+        name="Membrane surface tension",
+        stages=[
+            Stage(
+                name="minimize_membrane",
+                stage_type="minimize",
+                ensemble="NVT",
+                minimize_steps=20000,
+                restraints=_restraint(10.0, "protein and backbone"),
+                output=_out(),
+            ),
+            _md_stage("heat_nvt", "NVT", ns=0.25, k=10.0, ramp=True),
+            _md_stage("eq_npat", "NPAT", ns=1.0, k=5.0, system_type="membrane"),
+            _md_stage("eq_npgt", "NPgT", ns=1.0, k=1.0, system_type="membrane"),
+            _md_stage("production_npgt", "NPgT", ns=20.0, k=0.0, system_type="membrane"),
+        ],
+    )
+
+
+def membrane_production_pipeline() -> Pipeline:
+    return Pipeline(
+        name="Membrane production from restart",
+        stages=[
+            _md_stage("production_semiiso_npt", "NPT", ns=20.0, chunks=1, system_type="membrane"),
+        ],
+    )
+
+
 def template_library() -> dict[str, Pipeline]:
     return {
         "Standard protein in water": default_pipeline(),
@@ -178,4 +263,7 @@ def template_library() -> dict[str, Pipeline]:
         "Cautious equilibration": cautious_equilibration_pipeline(),
         "Production only from restart": production_only_pipeline(),
         "Chunked production 100 ns": chunked_production_pipeline(),
+        "Membrane gentle relax": membrane_relax_pipeline(),
+        "Membrane surface tension": membrane_surface_tension_pipeline(),
+        "Membrane production from restart": membrane_production_pipeline(),
     }
