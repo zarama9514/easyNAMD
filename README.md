@@ -1,6 +1,6 @@
 # easyNAMD
 
-![easyNAMD logo](docs/assets/easyNAMD_logo.png)
+![easyNAMD logo](docs/assets/easyNAMD_logo_wide.png)
 
 GUI for preparing molecular dynamics systems in VMD for subsequent simulation in NAMD.
 
