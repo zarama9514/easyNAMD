@@ -126,6 +126,10 @@ class Stage:
     ramp_end: float = 310.0
     ramp_increment: float = 5.0
     ramp_freq: int = 1000
+    restart_prefix: str = ""        # optional stage input prefix without .restart.coor/.vel/.xsc
+    restart_coordinates: str = ""   # optional explicit stage input .coor
+    restart_velocities: str = ""    # optional explicit stage input .vel
+    restart_xsc: str = ""           # optional explicit stage input .xsc
     pressure_control: PressureControlConfig = field(default_factory=PressureControlConfig)
     restraints: RestraintConfig = field(default_factory=RestraintConfig)
     output: OutputConfig = field(default_factory=OutputConfig)

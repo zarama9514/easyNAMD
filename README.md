@@ -1,5 +1,7 @@
 # easyNAMD
 
+![easyNAMD logo](docs/assets/easyNAMD_logo.png)
+
 GUI for preparing molecular dynamics systems in VMD for subsequent simulation in NAMD.
 
 A Python tool designed to simplify work with VMD/NAMD. Its main features include preparing data for creating .psf/.pdb files and generating configuration files.
@@ -47,10 +49,13 @@ Generate server-ready NAMD inputs for conventional MD:
 - Membrane system mode adds `NPAT` and `NPgT` stage ensembles, semi-isotropic membrane NPT defaults, `surfaceTensionTarget`, and membrane-specific pipeline templates.
 - Duration helpers: stage length can be edited as steps, ps or ns; long stages can be split into restart-chained chunks.
 - Automatic chaining via previous stage restart files (`.restart.coor/.vel/.xsc`), plus restart/continue mode from an external restart prefix.
+- Any stage can override the automatic chain with its own input restart files (`restart files` in the stage table). Pick the `.coor`, `.vel` and `.xsc` files through the file dialog; easyNAMD will copy them and use them for that stage instead of the previous stage output.
 - Full package preview, timeline summary and pre-flight validation with errors and warnings.
 - Full Simulate project save/load, system composition analysis, restart triplet inspection, config linting and live protocol/report summary.
-- Restraint PDB generation from validated common selections such as protein backbone, protein heavy atoms, lipid headgroups, lipid tails and ligand-like residues.
-- Restraint schedule helper for adding staged equilibration blocks with decreasing force constants.
+- Preflight checks catch PSF/PDB atom-count mismatches, empty parameter/restart files, incomplete cell vectors and restraint-reference atom-count mismatches before package generation.
+- Generated packages include provenance in both `protocol.md` and `namd_config_summary.json`: UTC timestamp, git commit, dirty-tree flag, platform and Python version.
+- Package inspection records copied inputs, per-stage restart chaining, pressure mode, `CUDASOAintegrate` value and whether constraints are actually enabled.
+- Positional-restraint force constants can be set per stage; automated restraint-PDB generation and restraint schedules are intentionally kept out of the GUI until that workflow is redesigned.
 - Export package layout with `conf/`, `system/`, `output/`, `templates/`, `namd_config_summary.json`, `protocol.md` and `README_run.txt`.
 - The package focuses on config construction and stage orchestration. It does not generate `run.sh` or SLURM scripts; GPU visibility, CPU counts, modules and extra NAMD flags are intentionally left to the command or batch script used on the target machine.
 - GPU-resident NAMD3 defaults: `CUDASOAintegrate auto` writes `off` for minimization and `on` for MD stages. Set it to `off` for CPU-only runs.
@@ -82,7 +87,7 @@ On first launch the app will attempt to detect VMD automatically. The path can b
 4. Use **Preview package** to inspect every generated `.conf`.
 5. Run **Generate NAMD package** and copy the generated package folder to the server.
 
-The generated package is self-contained for server execution:
+The generated package is self-contained for server execution and includes a reproducibility summary:
 
 ```
 namd/
@@ -90,8 +95,8 @@ namd/
   system/                # copied psf/pdb/cell/parameter/restart inputs
   output/                # NAMD restart, trajectory and xst outputs
   templates/pipeline.json
-  namd_config_summary.json
-  protocol.md            # human-readable simulation protocol
+  namd_config_summary.json  # system, pipeline, provenance, inspection and warnings
+  protocol.md               # human-readable simulation protocol with provenance
   README_run.txt
 ```
 
@@ -124,6 +129,7 @@ gui/
   prepare_panel.py   # Prepare PDB tab (groups, chains, altLoc, mol2)
   build_panel.py     # step-by-step build tabs
   simulate_panel.py  # NAMD pipeline/package generator
+  namd_stage_row.py  # editable stage row widget used by Simulate
   webview_window.py  # standalone pywebview process for the 3D viewer
 core/
   pdb_parser.py      # PDB parsing (chains, SS bonds, HIS, hetero, missing res/atoms, gaps)
@@ -132,7 +138,7 @@ core/
   viewer_html.py     # 3Dmol.js page generation
   his_images.py      # RDKit-rendered HSD/HSE/HSP legend
   mol2.py            # PDB → mol2 via Open Babel
-  namd/              # NAMD stages, pipelines and .conf writer
+  namd/              # NAMD stages, validation, inspection, protocol and .conf writer
     tools.py         # system analyzer, restart inspector, restraint PDB writer and config lint
   tcl_writer.py      # Tcl generation (psfgen, hetero segments, solvate, autoionize, cell, charge, recenter)
   vmd_runner.py      # VMD execution via subprocess

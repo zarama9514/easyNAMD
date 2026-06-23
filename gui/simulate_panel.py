@@ -1,7 +1,7 @@
 import json
 import os
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
@@ -11,13 +11,13 @@ from core.namd import (
 )
 from core.namd.conf_writer import stage_conf_text
 from core.namd.models import dataclass_from_dict, to_dict
-from core.namd.package import generate_package, validate_pipeline_report
+from core.namd.package import generate_package, inspect_package_plan, validate_pipeline_report
 from core.namd.tools import (
     detect_system,
     inspect_restart,
     lint_conf_text,
-    write_restraint_pdb,
 )
+from gui.namd_stage_row import StageRow
 
 ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 PARAMETERS_DIR = os.path.join(ROOT_DIR, "parameters")
@@ -31,164 +31,6 @@ def collect_parameter_files() -> list[str]:
         for f in os.listdir(PARAMETERS_DIR)
         if f.endswith((".prm", ".str"))
     )
-
-
-class StageRow(ctk.CTkFrame):
-    def __init__(self, parent, stage: Stage, on_remove, on_duplicate, on_up,
-                 on_down, on_change):
-        super().__init__(parent, fg_color="transparent")
-        self.stage = stage
-        self._on_change = on_change
-        self._widgets_to_bind = []
-        self.enabled_var = tk.BooleanVar(value=stage.enabled)
-        self.name_var = tk.StringVar(value=stage.name)
-        self.type_var = tk.StringVar(value=stage.stage_type)
-        self.ensemble_var = tk.StringVar(value=stage.ensemble)
-        duration = stage.duration_value if stage.stage_type == "md" else stage.step_count()
-        self.duration_var = tk.StringVar(value=_num(duration))
-        self.unit_var = tk.StringVar(value=stage.duration_unit if stage.stage_type == "md" else "steps")
-        self.timestep_var = tk.StringVar(value=_num(stage.timestep))
-        self.temp_var = tk.StringVar(value=_num(stage.temperature))
-        self.pressure_var = tk.StringVar(value=_num(stage.pressure))
-        self.ramp_var = tk.BooleanVar(value=stage.temperature_ramp)
-        self.ramp_start_var = tk.StringVar(value=_num(stage.ramp_start))
-        self.ramp_end_var = tk.StringVar(value=_num(stage.ramp_end))
-        self.ramp_increment_var = tk.StringVar(value=_num(stage.ramp_increment))
-        self.ramp_freq_var = tk.StringVar(value=_num(stage.ramp_freq))
-        self.chunks_var = tk.StringVar(value=_num(max(1, int(stage.chunk_count))))
-        self.restraint_var = tk.StringVar(value=_num(stage.restraints.force_constant))
-        self.restart_var = tk.StringVar(value=_num(stage.output.restart_freq))
-        self.dcd_var = tk.StringVar(value=_num(stage.output.dcd_freq))
-        self.energy_var = tk.StringVar(value=_num(stage.output.output_energies))
-
-        ctk.CTkCheckBox(self, text="", variable=self.enabled_var, width=26,
-                        command=self._commit).grid(row=0, column=0, padx=2)
-        self._entry(self.name_var, 130, 1)
-        ctk.CTkOptionMenu(self, variable=self.type_var, values=["minimize", "md"],
-                          width=92, command=lambda _: self._commit()).grid(row=0, column=2, padx=2)
-        ctk.CTkOptionMenu(self, variable=self.ensemble_var,
-                          values=["NVE", "NVT", "NPT", "NPAT", "NPgT"], width=78,
-                          command=lambda _: self._commit()).grid(row=0, column=3, padx=2)
-        self._entry(self.duration_var, 70, 4)
-        ctk.CTkOptionMenu(self, variable=self.unit_var, values=["steps", "ps", "ns"],
-                          width=70, command=lambda _: self._commit()).grid(row=0, column=5, padx=2)
-        self._entry(self.timestep_var, 58, 6)
-        self._entry(self.temp_var, 62, 7)
-        self._entry(self.pressure_var, 72, 8)
-        ctk.CTkCheckBox(self, text="", variable=self.ramp_var, width=26,
-                        command=self._toggle_ramp_details).grid(row=0, column=9, padx=2)
-        self._entry(self.chunks_var, 54, 10)
-        self._entry(self.restraint_var, 58, 11)
-        self._entry(self.restart_var, 72, 12)
-        self._entry(self.dcd_var, 72, 13)
-        self._entry(self.energy_var, 72, 14)
-
-        ctk.CTkButton(self, text="↑", width=28, command=lambda: on_up(self)).grid(row=0, column=15, padx=1)
-        ctk.CTkButton(self, text="↓", width=28, command=lambda: on_down(self)).grid(row=0, column=16, padx=1)
-        ctk.CTkButton(self, text="+", width=28, command=lambda: on_duplicate(self)).grid(row=0, column=17, padx=1)
-        ctk.CTkButton(self, text="✕", width=28, fg_color="transparent",
-                      text_color="red", command=lambda: on_remove(self)).grid(row=0, column=18, padx=1)
-
-        self.ramp_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.ramp_frame.grid(row=1, column=1, columnspan=14, sticky="w", padx=2, pady=(3, 0))
-        self._ramp_entry("T0", self.ramp_start_var, 0)
-        self._ramp_entry("Tend", self.ramp_end_var, 2)
-        self._ramp_entry("dT", self.ramp_increment_var, 4)
-        self._ramp_entry("rFreq", self.ramp_freq_var, 6)
-
-        for widget in self._widgets_to_bind:
-            widget.bind("<KeyRelease>", self._commit)
-            widget.bind("<FocusOut>", self._commit)
-        self._toggle_ramp_details(commit=False)
-
-    def _entry(self, var, width: int, column: int):
-        entry = ctk.CTkEntry(self, textvariable=var, width=width)
-        entry.grid(row=0, column=column, padx=2, sticky="ew")
-        self._widgets_to_bind.append(entry)
-
-    def _ramp_entry(self, label: str, var, column: int):
-        ctk.CTkLabel(self.ramp_frame, text=label, text_color="gray").grid(
-            row=0, column=column, sticky="w", padx=(2, 3))
-        entry = ctk.CTkEntry(self.ramp_frame, textvariable=var, width=64)
-        entry.grid(row=0, column=column + 1, sticky="w", padx=(0, 8))
-        self._widgets_to_bind.append(entry)
-
-    def _toggle_ramp_details(self, commit: bool = True):
-        if self.ramp_var.get():
-            self.ramp_frame.grid()
-        else:
-            self.ramp_frame.grid_remove()
-        if commit:
-            self._commit(resize_table=True)
-
-    def to_stage(self) -> Stage:
-        duration = _float_value(self.duration_var, self.stage.duration_value)
-        unit = self.unit_var.get()
-        temperature = _float_value(self.temp_var, self.stage.temperature)
-        dcd_freq = _int_value(self.dcd_var, self.stage.output.dcd_freq)
-        energy_freq = _int_value(self.energy_var, self.stage.output.output_energies)
-        stage = Stage(
-            name=self.name_var.get().strip() or "stage",
-            stage_type=self.type_var.get(),
-            ensemble=self.ensemble_var.get(),
-            enabled=self.enabled_var.get(),
-            steps=max(1, int(round(duration))),
-            minimize_steps=max(1, int(round(duration))),
-            duration_value=duration,
-            duration_unit=unit,
-            timestep=_float_value(self.timestep_var, self.stage.timestep, 0.001),
-            temperature=temperature,
-            pressure=_float_value(self.pressure_var, self.stage.pressure),
-            temperature_ramp=self.ramp_var.get(),
-            pressure_control=self.stage.pressure_control,
-            chunk_count=_int_value(self.chunks_var, self.stage.chunk_count, 1),
-            ramp_start=_float_value(self.ramp_start_var, self.stage.ramp_start),
-            ramp_end=_float_value(self.ramp_end_var, temperature),
-            ramp_increment=_float_value(self.ramp_increment_var, self.stage.ramp_increment, 0.001),
-            ramp_freq=_int_value(self.ramp_freq_var, self.stage.ramp_freq, 1),
-        )
-        stage.sync_steps_from_duration()
-        stage.restraints.selection = self.stage.restraints.selection
-        stage.restraints.reference_pdb = self.stage.restraints.reference_pdb
-        stage.restraints.force_constant = _float_value(
-            self.restraint_var, self.stage.restraints.force_constant)
-        stage.restraints.enabled = stage.restraints.force_constant > 0.0
-        stage.output.restart_freq = _int_value(self.restart_var, self.stage.output.restart_freq, 1)
-        stage.output.dcd_freq = dcd_freq
-        stage.output.xst_freq = dcd_freq
-        stage.output.output_energies = energy_freq
-        stage.output.output_timing = energy_freq
-        return stage
-
-    def _commit(self, event=None, resize_table: bool = False):
-        self.stage = self.to_stage()
-        self._on_change(self, resize_table)
-
-
-def _num(value) -> str:
-    try:
-        return f"{float(value):g}"
-    except (TypeError, ValueError):
-        return str(value)
-
-
-def _float_value(var, fallback: float, minimum: float | None = None) -> float:
-    try:
-        value = float(str(var.get()).strip().replace(",", "."))
-    except (TypeError, ValueError, tk.TclError):
-        value = float(fallback)
-    if minimum is not None:
-        value = max(minimum, value)
-    return value
-
-
-def _int_value(var, fallback: int, minimum: int = 1) -> int:
-    try:
-        value = int(round(float(str(var.get()).strip().replace(",", "."))))
-    except (TypeError, ValueError, tk.TclError):
-        value = int(fallback)
-    return max(minimum, value)
-
 
 class SimulatePanel(ctk.CTkFrame):
     def __init__(self, parent, config: dict, build_system_provider=None):
@@ -241,8 +83,8 @@ class SimulatePanel(ctk.CTkFrame):
         ).pack(side="left", padx=4)
         ctk.CTkButton(
             type_row,
-            text="Membrane defaults",
-            width=140,
+            text="Apply membrane preset",
+            width=165,
             command=self._apply_membrane_defaults,
         ).pack(side="left", padx=6)
         row += 1
@@ -378,19 +220,14 @@ class SimulatePanel(ctk.CTkFrame):
             variable=self.template_var,
             values=list(template_library().keys()),
             width=210,
+            command=self._apply_library_template,
         )
         self.template_menu.pack(side="left", padx=3)
-        ctk.CTkButton(toolbar, text="Apply", width=70,
-                      command=self._apply_library_template).pack(side="left", padx=3)
         ctk.CTkButton(toolbar, text="+ Stage", width=80, command=self._add_stage).pack(side="left", padx=3)
         ctk.CTkButton(toolbar, text="Save template", width=110,
                       command=self._save_template).pack(side="left", padx=3)
         ctk.CTkButton(toolbar, text="Load template", width=110,
                       command=self._load_template).pack(side="left", padx=3)
-        ctk.CTkButton(toolbar, text="Restraints", width=95,
-                      command=self._generate_restraints).pack(side="left", padx=3)
-        ctk.CTkButton(toolbar, text="Schedule", width=90,
-                      command=self._add_restraint_schedule).pack(side="left", padx=3)
 
         self.table_scroll = ctk.CTkScrollableFrame(
             scroll, orientation="horizontal", height=230, fg_color="transparent")
@@ -401,9 +238,9 @@ class SimulatePanel(ctk.CTkFrame):
         header.grid(row=0, column=0, sticky="w", pady=(0, 2))
         labels = [
             "on", "name", "type", "ens", "dur", "unit", "dt", "T", "P",
-            "ramp", "chunks", "k", "restart", "dcd", "energy",
+            "ramp", "chunks", "k", "restart files", "rstFreq", "dcd", "energy",
         ]
-        widths = [28, 130, 92, 78, 70, 70, 58, 62, 72, 34, 54, 58, 72, 72, 72]
+        widths = [28, 130, 92, 78, 70, 70, 58, 62, 72, 34, 54, 58, 180, 72, 72, 72]
         for col, (label, width) in enumerate(zip(labels, widths)):
             ctk.CTkLabel(header, text=label, width=width, text_color="gray").grid(row=0, column=col, padx=2)
         self.stages_frame = ctk.CTkFrame(self.table_scroll, fg_color="transparent")
@@ -463,7 +300,9 @@ class SimulatePanel(ctk.CTkFrame):
         self.pipeline = pipeline
         self._populate_stages()
 
-    def _apply_library_template(self):
+    def _apply_library_template(self, selected: str | None = None):
+        if selected:
+            self.template_var.set(selected)
         self._set_pipeline(self._with_stage_pressure_defaults(template_library()[self.template_var.get()]))
 
     def _collect_pipeline(self) -> Pipeline:
@@ -800,14 +639,28 @@ class SimulatePanel(ctk.CTkFrame):
         pipeline = self._collect_pipeline()
         errors, warnings = validate_pipeline_report(system, pipeline)
         summary = detect_system(system.pdb)
+        inspection = inspect_package_plan(system, pipeline)
         lines = [
             "Simulation report",
             f"System type: {system.system_type}",
             f"Pipeline: {pipeline.name}",
             f"Expanded stages: {len(pipeline.expanded_stages())}",
             f"Total MD: {pipeline.total_duration_ns():g} ns",
+            f"PSF atoms: {inspection.psf_atoms}",
+            f"PDB atoms: {inspection.pdb_atoms}",
             "",
             *summary.lines(),
+            "",
+            "Package inspection",
+        ]
+        for row in inspection.stages:
+            restart = row.restart_source or "initial coordinates"
+            constraints = "on" if row.constraints else "off"
+            lines.append(
+                f"{row.prefix}.conf: pressure={row.pressure_mode}, "
+                f"CUDASOA={row.cuda_soa_integrate}, constraints={constraints}, restart={restart}"
+            )
+        lines += [
             "",
             "Validation",
         ]
@@ -816,84 +669,6 @@ class SimulatePanel(ctk.CTkFrame):
         if not errors and not warnings:
             lines.append("OK")
         self._set_log("\n".join(lines))
-
-    def _generate_restraints(self):
-        pdb = self.pdb_var.get().strip()
-        if not pdb or not os.path.isfile(pdb):
-            messagebox.showerror("Restraints", "Select an input PDB first.")
-            return
-        selection = simpledialog.askstring(
-            "Restraints",
-            "Selection (examples: protein and backbone, protein and heavy, lipid and headgroup, ligand):",
-            initialvalue="protein and backbone",
-        )
-        if not selection:
-            return
-        k = simpledialog.askfloat("Restraints", "Force constant:", initialvalue=5.0, minvalue=0.0)
-        if k is None:
-            return
-        path = filedialog.asksaveasfilename(
-            title="Save restraint PDB",
-            defaultextension=".pdb",
-            filetypes=[("PDB", "*.pdb"), ("All files", "*.*")],
-        )
-        if not path:
-            return
-        try:
-            selected = write_restraint_pdb(pdb, path, selection, k)
-        except Exception as exc:
-            messagebox.showerror("Restraints", str(exc))
-            return
-        for row in self.stage_rows:
-            if row.restraint_var.get().strip() not in ("", "0", "0.0"):
-                row.stage.restraints.reference_pdb = path
-                row.stage.restraints.selection = selection
-                row.stage.restraints.force_constant = k
-        self.pipeline = self._collect_pipeline()
-        self._set_log(f"Generated restraint PDB:\n{path}\nSelected atoms: {selected}")
-
-    def _add_restraint_schedule(self):
-        spec = simpledialog.askstring(
-            "Restraint schedule",
-            "Format: k_start,k_end,count,duration_ns,selection",
-            initialvalue="10,0,5,0.5,protein and backbone",
-        )
-        if not spec:
-            return
-        parts = [p.strip() for p in spec.split(",", 4)]
-        if len(parts) != 5:
-            messagebox.showerror("Restraint schedule", "Expected: k_start,k_end,count,duration_ns,selection")
-            return
-        try:
-            k_start = float(parts[0])
-            k_end = float(parts[1])
-            count = max(1, int(parts[2]))
-            duration = max(0.001, float(parts[3]))
-        except ValueError as exc:
-            messagebox.showerror("Restraint schedule", str(exc))
-            return
-        selection = parts[4]
-        stages = [row.to_stage() for row in self.stage_rows]
-        denom = max(1, count - 1)
-        for i in range(count):
-            k = k_start + (k_end - k_start) * i / denom
-            ensemble = "NPAT" if self.system_type_var.get() == "membrane" else "NPT"
-            stage = Stage(
-                name=f"schedule_k{k:g}".replace(".", "_"),
-                stage_type="md",
-                ensemble=ensemble,
-                duration_value=duration,
-                duration_unit="ns",
-                timestep=2.0,
-                pressure_control=pressure_control_for_ensemble(ensemble, self.system_type_var.get()),
-            )
-            stage.restraints.selection = selection
-            stage.restraints.force_constant = k
-            stage.restraints.enabled = k > 0.0
-            stage.sync_steps_from_duration()
-            stages.append(stage)
-        self.pipeline.stages = stages
-        self._populate_stages()
 
     def _validate(self):
         errors, warnings = validate_pipeline_report(self._collect_system(), self._collect_pipeline())

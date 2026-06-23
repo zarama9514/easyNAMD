@@ -96,6 +96,34 @@ def detect_system(pdb_path: str) -> SystemSummary:
     return summary
 
 
+def count_pdb_atoms(path: str) -> int:
+    if not path or not os.path.isfile(path):
+        return 0
+    count = 0
+    with open(path) as f:
+        for line in f:
+            if line[:6].strip() in ("ATOM", "HETATM"):
+                count += 1
+    return count
+
+
+def count_psf_atoms(path: str) -> int:
+    if not path or not os.path.isfile(path):
+        return 0
+    with open(path, errors="replace") as f:
+        for line in f:
+            if "!NATOM" not in line:
+                continue
+            parts = line.split()
+            if not parts:
+                continue
+            try:
+                return int(parts[0])
+            except ValueError:
+                return 0
+    return 0
+
+
 def inspect_restart(prefix: str) -> list[str]:
     if not prefix:
         return ["Restart prefix is empty."]
@@ -104,7 +132,12 @@ def inspect_restart(prefix: str) -> list[str]:
     for ext in ("coor", "vel", "xsc"):
         path = f"{prefix}.restart.{ext}"
         if os.path.isfile(path):
-            lines.append(f"OK {os.path.basename(path)} ({os.path.getsize(path)} bytes)")
+            size = os.path.getsize(path)
+            if size > 0:
+                lines.append(f"OK {os.path.basename(path)} ({size} bytes)")
+            else:
+                ok = False
+                lines.append(f"EMPTY {path}")
         else:
             ok = False
             lines.append(f"MISSING {path}")
@@ -134,10 +167,12 @@ def atom_matches_selection(line: str, selection: str) -> bool:
     resname = _resname(line)
     atom = _atom_name(line)
     chain = _chain(line).lower()
+    resid = _resid(line)
+    segname = _segname(line).lower()
     is_hydrogen = atom.upper().startswith("H") or (len(line) > 77 and line[76:78].strip().upper() == "H")
 
     clauses = [part.strip() for part in text.split(" and ") if part.strip()]
-    return all(_match_clause(clause, resname, atom, chain, is_hydrogen) for clause in clauses)
+    return all(_match_clause(clause, resname, atom, chain, resid, segname, is_hydrogen) for clause in clauses)
 
 
 def validate_selection(selection: str) -> None:
@@ -149,7 +184,8 @@ def validate_selection(selection: str) -> None:
             raise ValueError(
                 f"Unsupported selection clause: '{clause}'. Supported clauses: "
                 "all, protein, backbone, heavy, lipid, headgroup, tail, water, ion, "
-                "ligand, resname NAME, chain ID, not CLAUSE."
+                "ligand, name ATOM, resname NAME, resid ID, resid START to END, "
+                "chain ID, segname NAME, hydrogen, not CLAUSE."
             )
 
 
@@ -173,13 +209,23 @@ def lint_conf_text(text: str) -> list[str]:
     return warnings
 
 
-def _match_clause(clause: str, resname: str, atom: str, chain: str, is_hydrogen: bool) -> bool:
+def _match_clause(
+    clause: str,
+    resname: str,
+    atom: str,
+    chain: str,
+    resid: str,
+    segname: str,
+    is_hydrogen: bool,
+) -> bool:
     if clause == "protein":
         return resname in PROTEIN_RESNAMES
     if clause == "backbone":
         return atom in BACKBONE_ATOMS
     if clause == "heavy":
         return not is_hydrogen
+    if clause == "hydrogen":
+        return is_hydrogen
     if clause == "lipid":
         return resname in LIPID_RESNAMES
     if clause == "headgroup":
@@ -194,22 +240,34 @@ def _match_clause(clause: str, resname: str, atom: str, chain: str, is_hydrogen:
         return resname not in PROTEIN_RESNAMES | WATER_RESNAMES | LIPID_RESNAMES | METAL_RESNAMES
     if clause.startswith("resname "):
         return resname == clause.split(None, 1)[1].strip().upper()
+    if clause.startswith("name "):
+        return atom == clause.split(None, 1)[1].strip().upper()
+    if clause.startswith("resid "):
+        return _match_resid_clause(clause, resid)
     if clause.startswith("chain "):
         return chain == clause.split(None, 1)[1].strip().lower()
+    if clause.startswith("segname "):
+        return segname == clause.split(None, 1)[1].strip().lower()
     if clause.startswith("not "):
-        return not _match_clause(clause[4:].strip(), resname, atom, chain, is_hydrogen)
+        return not _match_clause(clause[4:].strip(), resname, atom, chain, resid, segname, is_hydrogen)
     raise ValueError(f"Unsupported selection clause: '{clause}'.")
 
 
 def _known_clause(clause: str) -> bool:
     if clause in {
         "protein", "backbone", "heavy", "lipid", "headgroup", "tail",
-        "water", "ion", "ions", "ligand",
+        "water", "ion", "ions", "ligand", "hydrogen",
     }:
         return True
     if clause.startswith("resname ") and clause.split(None, 1)[1].strip():
         return True
+    if clause.startswith("name ") and clause.split(None, 1)[1].strip():
+        return True
+    if clause.startswith("resid ") and _valid_resid_clause(clause):
+        return True
     if clause.startswith("chain ") and clause.split(None, 1)[1].strip():
+        return True
+    if clause.startswith("segname ") and clause.split(None, 1)[1].strip():
         return True
     if clause.startswith("not "):
         return _known_clause(clause[4:].strip())
@@ -221,10 +279,43 @@ def _normalize_selection(selection: str) -> str:
     aliases = {
         "protein backbone": "protein and backbone",
         "protein heavy": "protein and heavy",
+        "not hydrogen": "not hydrogen",
         "lipid headgroups": "lipid and headgroup",
         "lipid tails": "lipid and tail",
     }
     return aliases.get(text, text)
+
+
+def _match_resid_clause(clause: str, resid: str) -> bool:
+    value = clause.split(None, 1)[1].strip()
+    parts = value.split()
+    if len(parts) == 3 and parts[1] == "to":
+        try:
+            start = int(parts[0])
+            end = int(parts[2])
+            current = int(resid)
+        except ValueError:
+            return False
+        lo, hi = sorted((start, end))
+        return lo <= current <= hi
+    return resid == value
+
+
+def _valid_resid_clause(clause: str) -> bool:
+    value = clause.split(None, 1)[1].strip()
+    if not value:
+        return False
+    parts = value.split()
+    if len(parts) == 1:
+        return True
+    if len(parts) == 3 and parts[1] == "to":
+        try:
+            int(parts[0])
+            int(parts[2])
+        except ValueError:
+            return False
+        return True
+    return False
 
 
 def _conf_keywords(text: str) -> dict[str, str]:
@@ -282,3 +373,7 @@ def _chain(line: str) -> str:
 
 def _resid(line: str) -> str:
     return line[22:26].strip() if len(line) >= 26 else ""
+
+
+def _segname(line: str) -> str:
+    return line[72:76].strip() if len(line) >= 76 else ""

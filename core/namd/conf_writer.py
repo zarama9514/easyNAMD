@@ -65,7 +65,13 @@ def stage_conf_text(
         f'structure           "{psf}"',
     ]
 
-    if previous_prefix:
+    if _has_explicit_stage_restart(stage):
+        lines += [
+            f'binCoordinates      "{system_dir}/{os.path.basename(stage.restart_coordinates)}"',
+            f'binVelocities       "{system_dir}/{os.path.basename(stage.restart_velocities)}"',
+            f'extendedSystem      "{system_dir}/{os.path.basename(stage.restart_xsc)}"',
+        ]
+    elif previous_prefix:
         prev = previous_prefix if "/" in previous_prefix else f"{output_dir}/{previous_prefix}"
         lines += [
             f'binCoordinates      "{prev}.restart.coor"',
@@ -218,6 +224,10 @@ def stage_conf_text(
 
 def _on(value: bool) -> str:
     return "on" if value else "off"
+
+
+def _has_explicit_stage_restart(stage: Stage) -> bool:
+    return bool(stage.restart_coordinates and stage.restart_velocities and stage.restart_xsc)
 
 
 def _cuda_soa_value(mode: str, stage: Stage) -> str:

@@ -42,6 +42,10 @@ class Pipeline:
                 chunk.name = f"{stage.name}_{i + 1:02d}"
                 if i > 0:
                     chunk.temperature_ramp = False
+                    chunk.restart_prefix = ""
+                    chunk.restart_coordinates = ""
+                    chunk.restart_velocities = ""
+                    chunk.restart_xsc = ""
                 expanded.append(chunk)
         return expanded
 
