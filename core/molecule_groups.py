@@ -62,7 +62,7 @@ class MolGroup:
         return TYPE_COLORS.get(self.group_type, '#cccccc')
 
     def selection(self) -> dict:
-        """3Dmol AtomSpec describing this group."""
+        """Small structured selection descriptor for downstream viewers/tools."""
         if self.group_type == 'protein':
             return {'chain': self.chain, 'hetflag': False}
         return {'resn': sorted(self.resnames)}
@@ -231,8 +231,7 @@ def build_focus_scene_pdb(pdb_file: str, residue: AltLocResidue,
                           radius: float = 5.0) -> tuple[str, list[tuple]]:
     """Build a self-contained PDB for the focus view: the residue's conformers
     plus every residue with an atom within `radius` of it. Everything lives in
-    one model so 3Dmol re-derives all bonds by distance (peptide bonds to
-    neighbours stay intact).
+    one model so the viewer can infer local bonding by distance.
 
     Conformer atoms are moved onto private numeric chains ('0' = common/backbone,
     '1','2',… = each altLoc code); environment atoms keep their original chain.

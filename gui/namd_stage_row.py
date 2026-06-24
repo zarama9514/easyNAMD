@@ -9,10 +9,11 @@ from core.namd import Stage
 class StageRow(ctk.CTkFrame):
     def __init__(self, parent, stage: Stage, on_remove, on_duplicate, on_up,
                  on_down, on_change):
-        super().__init__(parent, fg_color="transparent")
+        super().__init__(parent, fg_color="transparent", height=1)
         self.stage = stage
         self._on_change = on_change
         self._widgets_to_bind = []
+        self._commit_after_id = None
         self.enabled_var = tk.BooleanVar(value=stage.enabled)
         self.name_var = tk.StringVar(value=stage.name)
         self.type_var = tk.StringVar(value=stage.stage_type)
@@ -52,7 +53,7 @@ class StageRow(ctk.CTkFrame):
                         command=self._toggle_ramp_details).grid(row=0, column=9, padx=2)
         self._entry(self.chunks_var, 54, 10)
         self._entry(self.restraint_var, 58, 11)
-        restart_frame = ctk.CTkFrame(self, fg_color="transparent")
+        restart_frame = ctk.CTkFrame(self, fg_color="transparent", height=1)
         restart_frame.grid(row=0, column=12, padx=2, sticky="ew")
         self.restart_input_button = ctk.CTkButton(
             restart_frame,
@@ -78,7 +79,7 @@ class StageRow(ctk.CTkFrame):
         ctk.CTkButton(self, text="✕", width=28, fg_color="transparent",
                       text_color="red", command=lambda: on_remove(self)).grid(row=0, column=19, padx=1)
 
-        self.ramp_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.ramp_frame = ctk.CTkFrame(self, fg_color="transparent", height=1)
         self.ramp_frame.grid(row=1, column=1, columnspan=14, sticky="w", padx=2, pady=(3, 0))
         self._ramp_entry("T0", self.ramp_start_var, 0)
         self._ramp_entry("Tend", self.ramp_end_var, 2)
@@ -86,7 +87,7 @@ class StageRow(ctk.CTkFrame):
         self._ramp_entry("rFreq", self.ramp_freq_var, 6)
 
         for widget in self._widgets_to_bind:
-            widget.bind("<KeyRelease>", self._commit)
+            widget.bind("<KeyRelease>", self._queue_commit)
             widget.bind("<FocusOut>", self._commit)
         self._toggle_ramp_details(commit=False)
 
@@ -154,8 +155,21 @@ class StageRow(ctk.CTkFrame):
         return stage
 
     def _commit(self, event=None, resize_table: bool = False):
+        if self._commit_after_id is not None:
+            self.after_cancel(self._commit_after_id)
+            self._commit_after_id = None
         self.stage = self.to_stage()
         self._on_change(self, resize_table)
+
+    def _queue_commit(self, event=None):
+        if self._commit_after_id is not None:
+            self.after_cancel(self._commit_after_id)
+        self._commit_after_id = self.after(180, self._run_queued_commit)
+
+    def _run_queued_commit(self):
+        self._commit_after_id = None
+        self.stage = self.to_stage()
+        self._on_change(self, False)
 
     def _choose_restart_files(self):
         coor = filedialog.askopenfilename(

@@ -1,8 +1,4 @@
-import json
 import os
-import subprocess
-import sys
-import tempfile
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
@@ -14,7 +10,8 @@ from core.molecule_groups import (
 )
 from core.mol2 import pdb_to_mol2
 from core.naming import stem as file_stem, structure_dir
-from core.viewer_html import build_viewer_html
+from core.vmd_viewer import VMDViewerController
+from gui.scrolling import XYScrollableFrame
 
 ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 
@@ -27,7 +24,7 @@ class GroupRow(ctk.CTkFrame):
     """One row: [checkbox] [icon + label] [count] [chain rename | →mol2]."""
 
     def __init__(self, parent, group: MolGroup, on_toggle, on_mol2):
-        super().__init__(parent, fg_color='transparent')
+        super().__init__(parent, fg_color='transparent', height=1)
         self.group = group
         self.enabled_var = tk.BooleanVar(value=group.group_type != 'water')
 
@@ -56,11 +53,11 @@ class AltLocRow(ctk.CTkFrame):
     """One row: [label] [choice dropdown] [View 3D]."""
 
     def __init__(self, parent, residue: AltLocResidue, on_view):
-        super().__init__(parent, fg_color='transparent')
+        super().__init__(parent, fg_color='transparent', height=1)
         self.residue = residue
         self.choice_var = tk.StringVar(value=residue.choice)
 
-        ctk.CTkLabel(self, text=residue.label(), anchor='w', width=220).pack(side='left', padx=6)
+        ctk.CTkLabel(self, text=residue.label(), anchor='w', width=250).pack(side='left', padx=6)
         ctk.CTkLabel(self, text='keep:', text_color='gray').pack(side='left')
         ctk.CTkOptionMenu(self, variable=self.choice_var,
                           values=residue.codes, width=70).pack(side='left', padx=6)
@@ -71,8 +68,10 @@ class AltLocRow(ctk.CTkFrame):
 
 
 class PreparePanel(ctk.CTkFrame):
-    def __init__(self, parent, on_saved=None):
+    def __init__(self, parent, config: dict, vmd_viewer: VMDViewerController, on_saved=None):
         super().__init__(parent)
+        self.config = config
+        self.vmd_viewer = vmd_viewer
         self._on_saved = on_saved          # called with the cleaned PDB path
         self._pdb_file:  str | None     = None
         self._groups:    list[MolGroup] = []
@@ -80,12 +79,6 @@ class PreparePanel(ctk.CTkFrame):
         self._altlocs:   list[AltLocResidue] = []
         self._altloc_rows: list[AltLocRow]   = []
 
-        # one persistent 3D window per session
-        self._viewer_proc:    subprocess.Popen | None = None
-        self._tmp_dir:        str | None = None
-        self._selection_file: str | None = None
-        self._command_file:   str | None = None
-        self._cmd_counter:    int = 0
         self._models: list[int] = []
         self._model_vars: dict[int, tk.BooleanVar] = {}
 
@@ -98,9 +91,10 @@ class PreparePanel(ctk.CTkFrame):
     def _build_ui(self):
         top = ctk.CTkFrame(self)
         top.pack(fill='x', padx=10, pady=8)
+        top.columnconfigure(1, weight=1)
         ctk.CTkLabel(top, text='PDB file:').pack(side='left', padx=(6, 4))
         self._pdb_var = tk.StringVar()
-        ctk.CTkEntry(top, textvariable=self._pdb_var, width=420).pack(side='left', padx=4)
+        ctk.CTkEntry(top, textvariable=self._pdb_var, width=520).pack(side='left', fill='x', expand=True, padx=4)
         ctk.CTkButton(top, text='Browse', width=80, command=self._browse_pdb).pack(side='left', padx=4)
 
         body = ctk.CTkFrame(self)
@@ -112,14 +106,15 @@ class PreparePanel(ctk.CTkFrame):
 
         ctk.CTkLabel(left, text='Molecular groups',
                      font=ctk.CTkFont(weight='bold')).pack(anchor='w', padx=8, pady=(6, 2))
-        self._list_frame = ctk.CTkScrollableFrame(left)
-        self._list_frame.pack(fill='both', expand=True, padx=4, pady=4)
+        list_scroll = XYScrollableFrame(left)
+        list_scroll.pack(fill='both', expand=True, padx=4, pady=4)
+        self._list_frame = list_scroll.content
         ctk.CTkLabel(self._list_frame, text='Load a PDB file to see groups',
                      text_color='gray').pack(anchor='w', padx=8, pady=8)
-        ctk.CTkButton(left, text='Show in 3D', command=self._show_in_3d).pack(pady=6)
+        self._show_3d_button = ctk.CTkButton(left, text='Show in 3D', command=self._show_in_3d)
 
         # ── Right column: models + alternative locations ──────────────── #
-        right = ctk.CTkFrame(body, width=280)
+        right = ctk.CTkFrame(body, width=430)
         right.pack(side='right', fill='y', padx=(8, 0))
         right.pack_propagate(False)
 
@@ -127,7 +122,7 @@ class PreparePanel(ctk.CTkFrame):
                      font=ctk.CTkFont(weight='bold')).pack(anchor='w', padx=8, pady=(8, 0))
         ctk.CTkLabel(right, text='tick to keep; keeping several merges them into one system',
                      text_color='gray', font=ctk.CTkFont(size=11)).pack(anchor='w', padx=8)
-        self._models_frame = ctk.CTkFrame(right, fg_color='transparent')
+        self._models_frame = ctk.CTkFrame(right, fg_color='transparent', height=1)
         self._models_frame.pack(fill='x', padx=4, pady=2)
         ctk.CTkLabel(self._models_frame, text='single model',
                      text_color='gray').pack(anchor='w', padx=8)
@@ -145,8 +140,9 @@ class PreparePanel(ctk.CTkFrame):
         ctk.CTkButton(alt_ctrl, text='Apply to all', width=90,
                       command=self._apply_default_altloc).pack(side='left')
 
-        self._altloc_frame = ctk.CTkScrollableFrame(right)
-        self._altloc_frame.pack(fill='both', expand=True, padx=4, pady=4)
+        altloc_scroll = XYScrollableFrame(right)
+        altloc_scroll.pack(fill='both', expand=True, padx=4, pady=4)
+        self._altloc_frame = altloc_scroll.content
         ctk.CTkLabel(self._altloc_frame, text='Load a PDB file to detect altLocs',
                      text_color='gray').pack(anchor='w', padx=8, pady=4)
 
@@ -154,7 +150,7 @@ class PreparePanel(ctk.CTkFrame):
         bottom.pack(fill='x', padx=10, pady=(0, 8))
         ctk.CTkLabel(bottom, text='Save to:').pack(side='left', padx=(6, 4))
         self._outpath_var = tk.StringVar()
-        ctk.CTkEntry(bottom, textvariable=self._outpath_var, width=340).pack(side='left', padx=4)
+        ctk.CTkEntry(bottom, textvariable=self._outpath_var, width=520).pack(side='left', fill='x', expand=True, padx=4)
         ctk.CTkButton(bottom, text='Browse', width=80, command=self._browse_output).pack(side='left', padx=4)
         ctk.CTkButton(bottom, text='Save cleaned PDB', fg_color='green',
                       command=self._save).pack(side='left', padx=12)
@@ -215,9 +211,13 @@ class PreparePanel(ctk.CTkFrame):
             messagebox.showerror('mol2 failed', msg)
 
     def _on_group_toggle(self):
-        """Live-update the open 3D window when a group checkbox changes."""
-        if self._is_window_open():
-            self._send_js(f'showGroups({json.dumps(sorted(self._selected_ids()))})')
+        """Refresh the open VMD scene after a group checkbox changes."""
+        if not self._pdb_file or not self.vmd_viewer.is_open():
+            return
+        try:
+            self.vmd_viewer.show_groups(self._vmd_path(), self._pdb_file, self._groups, self._selected_ids())
+        except Exception as exc:
+            messagebox.showerror('VMD viewer', str(exc))
 
     # ------------------------------------------------------------------ #
     #  Alternative locations                                               #
@@ -249,86 +249,32 @@ class PreparePanel(ctk.CTkFrame):
         return {row.residue.key(): row.choice() for row in self._altloc_rows}
 
     def _view_altloc(self, residue: AltLocResidue):
-        """Focus a residue's altLoc conformers inside the (single) 3D window."""
-        if not self._ensure_window():
-            return
-        focus_pdb, conf_map = build_focus_scene_pdb(self._pdb_file, residue)
-        conf_chains = [chain for _code, chain in conf_map]
-        self._send_js(
-            f'focusAltloc({json.dumps(residue.chain)}, {int(residue.resid)}, '
-            f'{json.dumps(focus_pdb)}, {json.dumps(conf_chains)}, '
-            f'{json.dumps(residue.codes)})'
-        )
-
-    # ------------------------------------------------------------------ #
-    #  Persistent 3D window                                                #
-    # ------------------------------------------------------------------ #
-
-    def _is_window_open(self) -> bool:
-        return self._viewer_proc is not None and self._viewer_proc.poll() is None
-
-    def _ensure_window(self) -> bool:
-        """Open the 3D window if it isn't already. Returns True on success."""
+        """Open VMD focused on a residue's altLoc conformers."""
         if not self._pdb_file:
             messagebox.showerror('Error', 'Load a PDB file first.')
-            return False
-        if self._is_window_open():
-            return True
-
-        self._tmp_dir = tempfile.mkdtemp(prefix='easynamd_')
-        html_path            = os.path.join(self._tmp_dir, 'viewer.html')
-        self._selection_file = os.path.join(self._tmp_dir, 'selection.json')
-        self._command_file   = os.path.join(self._tmp_dir, 'command.json')
-        self._cmd_counter    = 0
-
-        build_viewer_html(self._pdb_file, self._groups, self._selected_ids(),
-                          self._altlocs, html_path)
-
-        self._viewer_proc = subprocess.Popen(
-            [sys.executable, '-m', 'gui.webview_window',
-             html_path, self._selection_file, self._command_file],
-            cwd=ROOT_DIR,
-        )
-        self._poll_viewer()
-        return True
-
-    def _send_js(self, js: str):
-        """Queue a JS snippet for the watcher thread in the 3D window."""
-        if not self._command_file:
             return
-        self._cmd_counter += 1
-        payload = {'n': self._cmd_counter, 'js': js}
-        with open(self._command_file, 'w') as f:
-            json.dump(payload, f)
+        focus_pdb, conf_map = build_focus_scene_pdb(self._pdb_file, residue)
+        title = f"{residue.chain}:{residue.resname}{residue.resid} alt {'/'.join(residue.codes)}"
+        try:
+            self.vmd_viewer.show_altloc_focus(self._vmd_path(), focus_pdb, title, residue.codes)
+        except Exception as exc:
+            messagebox.showerror('VMD viewer', str(exc))
+
+    # ------------------------------------------------------------------ #
+    #  VMD view                                                            #
+    # ------------------------------------------------------------------ #
 
     def _show_in_3d(self):
-        if self._ensure_window():
-            self._send_js(f'showGroups({json.dumps(sorted(self._selected_ids()))})')
-
-    def _poll_viewer(self):
-        """When the window closes, sync the selection back into the checkboxes."""
-        if self._viewer_proc is None:
+        if not self._pdb_file:
+            messagebox.showerror('Error', 'Load a PDB file first.')
             return
-        if self._viewer_proc.poll() is None:
-            self.after(500, self._poll_viewer)
-            return
+        try:
+            self.vmd_viewer.show_groups(self._vmd_path(), self._pdb_file, self._groups, self._selected_ids())
+        except Exception as exc:
+            messagebox.showerror('VMD viewer', str(exc))
 
-        # Window closed — read back selection if present, then reset session
-        if self._selection_file and os.path.isfile(self._selection_file):
-            try:
-                with open(self._selection_file) as f:
-                    self._apply_selection(set(json.load(f)))
-            except (json.JSONDecodeError, OSError):
-                pass
-
-        self._viewer_proc    = None
-        self._command_file   = None
-        self._selection_file = None
-        self._tmp_dir        = None
-
-    def _apply_selection(self, ids: set[str]):
-        for row in self._rows:
-            row.enabled_var.set(row.group.group_id in ids)
+    def _vmd_path(self) -> str:
+        return self.config.get('vmd_path', '').strip()
 
     # ------------------------------------------------------------------ #
     #  File helpers                                                        #
@@ -355,6 +301,8 @@ class PreparePanel(ctk.CTkFrame):
         self._altlocs = find_altlocs(self._pdb_file)
         self._populate_list()
         self._populate_altlocs()
+        if self._pdb_file:
+            self._show_3d_button.pack(pady=6)
 
     def _populate_models(self):
         for w in self._models_frame.winfo_children():

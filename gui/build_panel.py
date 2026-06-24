@@ -1,7 +1,4 @@
 import os
-import subprocess
-import sys
-import tempfile
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
@@ -18,10 +15,8 @@ from core.zinc import detect_zinc_coordination
 from core.naming import stem as file_stem, structure_dir
 from core.tcl_writer import write_build_script
 from core.vmd_runner import run_vmd
-from core.viewer_html import build_residue_focus_html
-from core.his_images import tautomer_images
-
-from PIL import Image
+from core.vmd_viewer import VMDViewerController
+from gui.scrolling import XYScrollableFrame
 
 ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 
@@ -84,9 +79,10 @@ class PatchRow(ctk.CTkFrame):
 
 
 class BuildPanel(ctk.CTkFrame):
-    def __init__(self, parent, config: dict, on_build_success=None):
+    def __init__(self, parent, config: dict, vmd_viewer: VMDViewerController, on_build_success=None):
         super().__init__(parent)
         self.config = config
+        self.vmd_viewer = vmd_viewer
         self._on_build_success = on_build_success
         self.pdb_info: PDBInfo | None = None
 
@@ -123,7 +119,7 @@ class BuildPanel(ctk.CTkFrame):
         self._build_ionize_tab(self.steps.tab("3. Ionize"))
 
         bottom = ctk.CTkFrame(self)
-        bottom.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        bottom.pack(fill="x", padx=10, pady=(0, 10))
 
         btn_row = ctk.CTkFrame(bottom, fg_color="transparent")
         btn_row.pack(pady=(8, 4))
@@ -136,16 +132,17 @@ class BuildPanel(ctk.CTkFrame):
         ctk.CTkButton(btn_row, text="Preview script", width=120,
                       command=self._preview_script).pack(side="left", padx=6)
         ctk.CTkButton(btn_row, text="Build", fg_color="green", command=self._run).pack(side="left", padx=6)
-        self.log_box = ctk.CTkTextbox(bottom, height=180, wrap="none")
-        self.log_box.pack(fill="both", expand=True, padx=5, pady=5)
+        self.log_box = ctk.CTkTextbox(bottom, height=150, wrap="none")
+        self.log_box.pack(fill="x", padx=5, pady=5)
 
     # ------------------------------------------------------------------ #
     #  Tab 1 — Build PSF                                                   #
     # ------------------------------------------------------------------ #
 
     def _build_psf_tab(self, parent):
-        scroll = ctk.CTkScrollableFrame(parent)
-        scroll.pack(fill="both", expand=True)
+        scroll_box = XYScrollableFrame(parent)
+        scroll_box.pack(fill="both", expand=True)
+        scroll = scroll_box.content
         scroll.columnconfigure(1, weight=1)
         self._psf_scroll = scroll
         row = 0
@@ -168,14 +165,14 @@ class BuildPanel(ctk.CTkFrame):
 
         # Warnings area (hidden until PDB is loaded)
         self._warn_row = row
-        self.warn_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        self.warn_frame = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
         self.warn_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=8)
         row += 1
 
         # Segments / chains
         section_label(scroll, "Segments (chains)").grid(row=row, column=0, columnspan=3, sticky="w", padx=8, pady=(10, 2))
         row += 1
-        self.segments_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        self.segments_frame = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
         self.segments_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=8)
         ctk.CTkLabel(self.segments_frame, text="Load a PDB to detect chains", text_color="gray").pack(anchor="w")
         row += 1
@@ -185,7 +182,7 @@ class BuildPanel(ctk.CTkFrame):
         row += 1
         self._build_his_legend(scroll, row)
         row += 1
-        self.his_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        self.his_frame = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
         self.his_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=8)
         ctk.CTkLabel(self.his_frame, text="No histidines found", text_color="gray").pack(anchor="w")
         row += 1
@@ -215,14 +212,14 @@ class BuildPanel(ctk.CTkFrame):
                      text_color="gray", font=ctk.CTkFont(size=11)).grid(
             row=row, column=0, columnspan=3, sticky="w", padx=10)
         row += 1
-        self.hetero_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        self.hetero_frame = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
         self.hetero_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=8)
         ctk.CTkLabel(self.hetero_frame, text="Load a PDB to detect hetero residues",
                      text_color="gray").pack(anchor="w")
         row += 1
 
         # Crystal water
-        cwater = ctk.CTkFrame(scroll, fg_color="transparent")
+        cwater = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
         cwater.grid(row=row, column=0, columnspan=3, sticky="w", padx=8, pady=(4, 0))
         self.keep_water_var = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(cwater, text="Keep crystal water (build as segment)",
@@ -235,7 +232,7 @@ class BuildPanel(ctk.CTkFrame):
         # Build options
         section_label(scroll, "Build options").grid(row=row, column=0, columnspan=3, sticky="w", padx=8, pady=(10, 2))
         row += 1
-        opts = ctk.CTkFrame(scroll, fg_color="transparent")
+        opts = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
         opts.grid(row=row, column=0, columnspan=3, sticky="w", padx=8)
         self.guesscoord_var     = tk.BooleanVar(value=True)
         self.regen_angles_var   = tk.BooleanVar(value=True)
@@ -255,7 +252,7 @@ class BuildPanel(ctk.CTkFrame):
         # Disulfide bonds
         section_label(scroll, "Disulfide bonds").grid(row=row, column=0, columnspan=3, sticky="w", padx=8, pady=(10, 2))
         row += 1
-        self.ss_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        self.ss_frame = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
         self.ss_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=8)
         ctk.CTkLabel(self.ss_frame, text="No SS bonds found", text_color="gray").pack(anchor="w")
         row += 1
@@ -270,7 +267,7 @@ class BuildPanel(ctk.CTkFrame):
             text_color="gray", font=ctk.CTkFont(size=11),
         ).grid(row=row, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 2))
         row += 1
-        self.patches_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        self.patches_frame = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
         self.patches_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=8)
         # "+ Add patch" lives inside patches_frame and is always kept last, so each
         # new patch row appears above it and pushes it down.
@@ -307,28 +304,18 @@ class BuildPanel(ctk.CTkFrame):
         }
 
     def _build_his_legend(self, parent, row):
-        """Show HSD/HSE/HSP structures (rendered by RDKit) as a quick reference."""
+        """Show a lightweight HSD/HSE/HSP reference."""
         captions = {
             "HSD": "proton on Nδ1 (neutral)",
             "HSE": "proton on Nε2 (neutral)",
             "HSP": "both protonated (+1)",
         }
-        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame = ctk.CTkFrame(parent, fg_color="transparent", height=1)
         frame.grid(row=row, column=0, columnspan=3, sticky="w", padx=14, pady=(0, 6))
 
-        self._his_imgs = []   # keep references so images aren't garbage-collected
-        try:
-            paths = tautomer_images()
-        except Exception:
-            paths = {}
-
         for col, name in enumerate(("HSD", "HSE", "HSP")):
-            cell = ctk.CTkFrame(frame, fg_color="transparent")
+            cell = ctk.CTkFrame(frame, fg_color="transparent", height=1)
             cell.grid(row=0, column=col, padx=10)
-            if name in paths:
-                img = ctk.CTkImage(light_image=Image.open(paths[name]), size=(120, 120))
-                self._his_imgs.append(img)
-                ctk.CTkLabel(cell, image=img, text="").pack()
             ctk.CTkLabel(cell, text=name, font=ctk.CTkFont(weight="bold")).pack()
             ctk.CTkLabel(cell, text=captions[name], text_color="gray",
                          font=ctk.CTkFont(size=11)).pack()
@@ -435,7 +422,7 @@ class BuildPanel(ctk.CTkFrame):
             return
 
         for het in heteros:
-            row = ctk.CTkFrame(self.hetero_frame, fg_color="transparent")
+            row = ctk.CTkFrame(self.hetero_frame, fg_color="transparent", height=1)
             row.pack(fill="x", pady=2)
             include_var = tk.BooleanVar(value=False)
             ctk.CTkCheckBox(row, text=het.label(), variable=include_var,
@@ -459,7 +446,7 @@ class BuildPanel(ctk.CTkFrame):
             ).pack(anchor="w", pady=2)
 
         if info.has_insercodes:
-            row = ctk.CTkFrame(self.warn_frame, fg_color="transparent")
+            row = ctk.CTkFrame(self.warn_frame, fg_color="transparent", height=1)
             row.pack(anchor="w", pady=2)
             ctk.CTkLabel(row, text="⚠  Insertion codes detected —", text_color="orange").pack(side="left")
             ctk.CTkCheckBox(row, text="regenerate resids", variable=self.regen_resids_var).pack(side="left", padx=6)
@@ -496,14 +483,14 @@ class BuildPanel(ctk.CTkFrame):
             ctk.CTkLabel(self.segments_frame, text="No ATOM chains found", text_color="gray").pack(anchor="w")
             return
 
-        header = ctk.CTkFrame(self.segments_frame, fg_color="transparent")
+        header = ctk.CTkFrame(self.segments_frame, fg_color="transparent", height=1)
         header.pack(fill="x")
         ctk.CTkLabel(header, text="Chain", width=50).pack(side="left", padx=4)
         ctk.CTkLabel(header, text="N-terminus", width=100).pack(side="left", padx=4)
         ctk.CTkLabel(header, text="C-terminus", width=100).pack(side="left", padx=4)
 
         for chain in self.pdb_info.chains:
-            row_frame = ctk.CTkFrame(self.segments_frame, fg_color="transparent")
+            row_frame = ctk.CTkFrame(self.segments_frame, fg_color="transparent", height=1)
             row_frame.pack(fill="x", pady=2)
             ctk.CTkLabel(row_frame, text=chain, width=50).pack(side="left", padx=4)
             first_var = tk.StringVar(value="NTER")
@@ -522,7 +509,7 @@ class BuildPanel(ctk.CTkFrame):
             return
 
         for his in self.pdb_info.histidines:
-            row_frame = ctk.CTkFrame(self.his_frame, fg_color="transparent")
+            row_frame = ctk.CTkFrame(self.his_frame, fg_color="transparent", height=1)
             row_frame.pack(fill="x", pady=2)
             ctk.CTkLabel(row_frame, text=str(his), width=80).pack(side="left", padx=4)
             zn_prot = self._zn_his_protonation(his.chain, his.resid)
@@ -614,18 +601,16 @@ class BuildPanel(ctk.CTkFrame):
         row.destroy()
 
     def _view_residue(self, chain: str, resid: str):
-        """Open a 3D viewer focused on a residue (heavy atoms + 5 Å environment)."""
+        """Open VMD focused on a residue (heavy atoms + 5 A environment)."""
         pdb = self.pdb_var.get().strip()
         if not pdb or not os.path.isfile(pdb):
             messagebox.showerror("Error", "Select a valid PDB file first.")
             return
-        tmp_dir = tempfile.mkdtemp(prefix="easynamd_")
-        html = os.path.join(tmp_dir, "residue.html")
-        build_residue_focus_html(pdb, chain, resid, html, title=f"{chain}:{resid}")
-        subprocess.Popen(
-            [sys.executable, "-m", "gui.webview_window", html],
-            cwd=ROOT_DIR,
-        )
+        vmd = self.config.get("vmd_path", "").strip()
+        try:
+            self.vmd_viewer.show_residue_focus(vmd, pdb, chain, resid, title=f"{chain}:{resid}")
+        except Exception as exc:
+            messagebox.showerror("VMD viewer", str(exc))
 
     def _collect_topology_files(self) -> list[str]:
         # .str (CHARMM stream) files also carry RESI topology definitions

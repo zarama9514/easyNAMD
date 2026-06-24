@@ -5,6 +5,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
+from core.vmd_viewer import VMDViewerController
 from gui.build_panel import BuildPanel
 from gui.prepare_panel import PreparePanel
 from gui.simulate_panel import SimulatePanel
@@ -74,6 +75,7 @@ class App(ctk.CTk):
         ctk.set_default_color_theme("blue")
 
         self.config_data = load_config()
+        self.vmd_viewer = VMDViewerController()
 
         # First-run setup if local VMD is missing.
         if not self.config_data.get("vmd_path"):
@@ -95,6 +97,7 @@ class App(ctk.CTk):
         self.build_panel = BuildPanel(
             self.tabs.tab("Build"),
             self.config_data,
+            vmd_viewer=self.vmd_viewer,
             on_build_success=self._offer_simulate_from_build,
         )
         self.build_panel.pack(fill="both", expand=True)
@@ -108,6 +111,8 @@ class App(ctk.CTk):
 
         # Prepare PDB tab (hands the cleaned PDB off to Build on save)
         self.prepare_panel = PreparePanel(self.tabs.tab("Prepare PDB"),
+                                          self.config_data,
+                                          vmd_viewer=self.vmd_viewer,
                                           on_saved=self._use_in_build)
         self.prepare_panel.pack(fill="both", expand=True)
 

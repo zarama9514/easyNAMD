@@ -18,6 +18,7 @@ from core.namd.tools import (
     lint_conf_text,
 )
 from gui.namd_stage_row import StageRow
+from gui.scrolling import XYScrollableFrame
 
 ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 PARAMETERS_DIR = os.path.join(ROOT_DIR, "parameters")
@@ -47,8 +48,9 @@ class SimulatePanel(ctk.CTkFrame):
     def _build_ui(self):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
-        scroll = ctk.CTkScrollableFrame(self)
-        scroll.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        scroll_box = XYScrollableFrame(self)
+        scroll_box.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        scroll = scroll_box.content
         scroll.columnconfigure(1, weight=1)
         row = 0
 
@@ -71,7 +73,7 @@ class SimulatePanel(ctk.CTkFrame):
         row = self._file_row(scroll, row, "Cell:", self.cell_var, self._browse_cell)
         row = self._file_row(scroll, row, "Package dir:", self.package_var, self._browse_package_dir)
 
-        type_row = ctk.CTkFrame(scroll, fg_color="transparent")
+        type_row = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
         type_row.grid(row=row, column=0, columnspan=4, sticky="ew", padx=8, pady=2)
         ctk.CTkLabel(type_row, text="System type:", width=90, anchor="w").pack(side="left")
         ctk.CTkOptionMenu(
@@ -89,7 +91,7 @@ class SimulatePanel(ctk.CTkFrame):
         ).pack(side="left", padx=6)
         row += 1
 
-        restart_row = ctk.CTkFrame(scroll, fg_color="transparent")
+        restart_row = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
         restart_row.grid(row=row, column=0, columnspan=4, sticky="ew", padx=8, pady=2)
         ctk.CTkLabel(restart_row, text="Start:", width=90, anchor="w").pack(side="left")
         ctk.CTkOptionMenu(restart_row, variable=self.start_mode_var,
@@ -102,7 +104,7 @@ class SimulatePanel(ctk.CTkFrame):
         ctk.CTkEntry(restart_row, textvariable=self.first_timestep_var, width=90).pack(side="left", padx=4)
         row += 1
 
-        param_row = ctk.CTkFrame(scroll, fg_color="transparent")
+        param_row = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
         param_row.grid(row=row, column=0, columnspan=4, sticky="ew", padx=8, pady=2)
         ctk.CTkLabel(param_row, text="Parameters:", width=90, anchor="w").pack(side="left")
         self.params_label = ctk.CTkLabel(param_row, text=self._params_text(), anchor="w")
@@ -118,7 +120,7 @@ class SimulatePanel(ctk.CTkFrame):
         ctk.CTkLabel(scroll, text="Global MD defaults", font=ctk.CTkFont(weight="bold")).grid(
             row=row, column=0, columnspan=4, sticky="w", padx=8, pady=(12, 2))
         row += 1
-        globals_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        globals_frame = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
         globals_frame.grid(row=row, column=0, columnspan=4, sticky="ew", padx=8)
         row += 1
 
@@ -169,7 +171,7 @@ class SimulatePanel(ctk.CTkFrame):
         ctk.CTkLabel(scroll, text="Advanced MD settings", font=ctk.CTkFont(weight="bold")).grid(
             row=row, column=0, columnspan=4, sticky="w", padx=8, pady=(12, 2))
         row += 1
-        advanced = ctk.CTkFrame(scroll, fg_color="transparent")
+        advanced = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
         advanced.grid(row=row, column=0, columnspan=4, sticky="ew", padx=8)
         row += 1
         self._small_menu(advanced, "rigidBonds", self.rigid_bonds_var,
@@ -186,7 +188,7 @@ class SimulatePanel(ctk.CTkFrame):
                          ["auto", "on", "off"], 2, 4, 90)
         self._small_menu(advanced, "DeviceMigration", self.device_migration_var,
                          ["off", "on"], 3, 0, 80)
-        checks = ctk.CTkFrame(scroll, fg_color="transparent")
+        checks = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
         checks.grid(row=row, column=0, columnspan=4, sticky="ew", padx=8, pady=(2, 0))
         row += 1
         for index, (text, var) in enumerate([
@@ -211,7 +213,7 @@ class SimulatePanel(ctk.CTkFrame):
         ctk.CTkLabel(scroll, text="Pipeline", font=ctk.CTkFont(weight="bold")).grid(
             row=row, column=0, columnspan=4, sticky="w", padx=8, pady=(12, 2))
         row += 1
-        toolbar = ctk.CTkFrame(scroll, fg_color="transparent")
+        toolbar = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
         toolbar.grid(row=row, column=0, columnspan=4, sticky="w", padx=8, pady=2)
         row += 1
         self.template_var = tk.StringVar(value="Standard protein in water")
@@ -229,12 +231,12 @@ class SimulatePanel(ctk.CTkFrame):
         ctk.CTkButton(toolbar, text="Load template", width=110,
                       command=self._load_template).pack(side="left", padx=3)
 
-        self.table_scroll = ctk.CTkScrollableFrame(
-            scroll, orientation="horizontal", height=230, fg_color="transparent")
+        self.table_scroll = XYScrollableFrame(scroll, height=230, fg_color="transparent")
         self.table_scroll.grid(row=row, column=0, columnspan=4, sticky="ew", padx=8, pady=(4, 0))
-        self.table_scroll.columnconfigure(0, weight=1)
+        table = self.table_scroll.content
+        table.columnconfigure(0, weight=1)
         row += 1
-        header = ctk.CTkFrame(self.table_scroll, fg_color="transparent")
+        header = ctk.CTkFrame(table, fg_color="transparent", height=1)
         header.grid(row=0, column=0, sticky="w", pady=(0, 2))
         labels = [
             "on", "name", "type", "ens", "dur", "unit", "dt", "T", "P",
@@ -243,7 +245,7 @@ class SimulatePanel(ctk.CTkFrame):
         widths = [28, 130, 92, 78, 70, 70, 58, 62, 72, 34, 54, 58, 180, 72, 72, 72]
         for col, (label, width) in enumerate(zip(labels, widths)):
             ctk.CTkLabel(header, text=label, width=width, text_color="gray").grid(row=0, column=col, padx=2)
-        self.stages_frame = ctk.CTkFrame(self.table_scroll, fg_color="transparent")
+        self.stages_frame = ctk.CTkFrame(table, fg_color="transparent", height=1)
         self.stages_frame.grid(row=1, column=0, sticky="w")
 
         self.timeline_box = ctk.CTkTextbox(scroll, height=120, wrap="none")
@@ -335,13 +337,13 @@ class SimulatePanel(ctk.CTkFrame):
             self._resize_stage_table()
         if self._timeline_after_id:
             self.after_cancel(self._timeline_after_id)
-        self._timeline_after_id = self.after(250, self._refresh_timeline)
+        self._timeline_after_id = self.after(450, self._refresh_timeline)
 
     def _resize_stage_table(self):
         if not hasattr(self, "table_scroll"):
             return
         height = 46 + sum(68 if row.ramp_var.get() else 38 for row in self.stage_rows)
-        self.table_scroll.configure(height=max(120, height))
+        self.table_scroll.configure(height=min(320, max(160, height)))
 
     def _collect_system(self) -> SystemConfig:
         system = SystemConfig(

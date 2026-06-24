@@ -1,19 +1,23 @@
 # TODO
 
-## Prepare PDB — altLoc rendering
+## Beta stabilization
 
-- [ ] **Починить отображение altLoc в фокусном просмотре.**
-  Несмотря на сборку отдельной focus-модели (`build_focus_scene_pdb`) с конформерами
-  на приватных цепях и окружением в 5 Å, визуально проблема остаётся:
-  пептидная связь NH–CO не рисуется, общий карбонил «висит в воздухе», его нужно
-  соединить с обоими `-C(=O)-R` конформеров.
-  Разобраться, как 3Dmol строит связи в такой модели (возможно, нужно явно задавать
-  bonds, или собирать сцену иначе — например, не разносить конформеры по цепям,
-  а отдавать 3Dmol реальные связи; либо рисовать поверх основной модели).
+- [ ] Test the full soluble-protein workflow on a second macOS machine.
+- [ ] Collect Linux/NAMD3 GPU launch feedback from beta testers.
+- [ ] Add one small public demo system or documented test input.
 
-## His protonation legend (RDKit)
+## VMD viewing
 
-- [ ] **Углероды на картинках HSD/HSE/HSP сделать не сливающимися с фоном.**
-  Сейчас цвет атомов углерода совпадает (или почти совпадает) с фоном —
-  плохо видно. Подобрать цвет углерода/фона так, чтобы структуры были читаемы
-  (например, тёмный фон + светлые атомы, либо непрозрачный светлый фон).
+- [ ] Improve altLoc focus views with conformer labels or a clearer color/material preset.
+- [ ] Consider optional persistent VMD annotations for selected residues.
+
+## Restraints and constraints
+
+- [ ] Design a native restraint builder for atom selections and generated restraint PDBs.
+- [ ] Add harmonic bond/angle/torsion potential support in a way that maps cleanly to NAMD input.
+- [ ] Revisit restraint schedules after the basic builder is stable.
+
+## Advanced sampling
+
+- [ ] Design, but do not rush, Colvars/enhanced-sampling support.
+- [ ] Evaluate aMD, metadynamics and ABF as separate advanced workflows.
