@@ -126,11 +126,19 @@ namd/
 
 ## Force Fields
 
-Bundled CHARMM topology/parameter files live in:
+Bundled default CHARMM topology/parameter files live in:
 
 ```text
 topologies/
 parameters/
+```
+
+They are refreshed from the official MacKerell Lab CHARMM36 February 2026
+`toppar_c36_feb26.tgz` release. A complete text-file mirror of that release is
+kept in:
+
+```text
+forcefields/charmm36_feb26/toppar/
 ```
 
 Ligand files can be added from the Build tab. Put reusable ligand files in:

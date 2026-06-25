@@ -48,6 +48,17 @@ def section_label(parent, text: str) -> ctk.CTkLabel:
     return ctk.CTkLabel(parent, text=text, font=ctk.CTkFont(weight="bold"))
 
 
+def _is_nonfatal_toppar_stream_message(low_line: str) -> bool:
+    return (
+        "failed to recognize set" in low_line
+        or "failed to recognize if" in low_line
+        or "failed to recognize wrnlev" in low_line
+        or "failed to recognize bomlev" in low_line
+        or "duplicate residue key" in low_line
+        or "duplicate type key" in low_line
+    )
+
+
 class PatchRow(ctk.CTkFrame):
     def __init__(self, parent, on_remove):
         super().__init__(parent, fg_color="transparent")
@@ -831,6 +842,8 @@ class BuildPanel(ctk.CTkFrame):
             except ValueError:
                 pass
         low = line.lower()
+        if _is_nonfatal_toppar_stream_message(low):
+            return
         for pat in self._PROBLEM_PATTERNS:
             if pat.lower() in low:
                 self._problems.append(line.strip())

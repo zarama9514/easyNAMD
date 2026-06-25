@@ -24,13 +24,13 @@ read rtf card append
 *
 31  1
 
-AUTOGENERATE ANGLE DIHE
-
 MASS  -1  HN3B       1.00800 H ! NAD+ aromatic hydrogen
 MASS  -1  CN1A      12.01100 C ! NAD+/NADH amide carbonyl carbon
 MASS  -1  CN3A      12.01100 C ! NAD+ aromatic carbon
 MASS  -1  CN3B      12.01100 C ! NAD+ aromatic carbon
 MASS  -1  CN3C      12.01100 C ! NADH aromatic carbon
+
+AUTO ANGLE DIHE
 
 RESI NIC         1.00  ! oxidized nicotinamide, jjp1/adm jr.
                        ! checked for consistency with new NA params, adm jr., 9/98

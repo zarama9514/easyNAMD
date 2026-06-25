@@ -45,6 +45,8 @@ MASS  -1  HA2        1.00800 ! alkane, CH2, new LJ params (see toppar_all22_prot
 MASS  -1  HA3        1.00800 ! alkane, CH3, new LJ params (see toppar_all22_prot_aliphatic_c27.str)
 MASS  -1  C         12.01100 ! carbonyl C, peptide backbone
 MASS  -1  CA        12.01100 ! aromatic C
+MASS  -1  CAG       12.01100 ! central C,ARG
+MASS  -1  CAB       12.01100 ! aromatic C,TYR
 MASS  -1  CT        12.01100 ! aliphatic sp3 C, new LJ params, no hydrogens
 MASS  -1  CT1       12.01100 ! aliphatic sp3 C for CH
 MASS  -1  CT2       12.01100 ! aliphatic sp3 C for CH2
@@ -144,7 +146,7 @@ ATOM HD1  HA2     0.09
 ATOM HD2  HA2     0.09
 ATOM NE   NC2    -0.70
 ATOM HE   HC      0.44
-ATOM CZ   C       0.64
+ATOM CZ   CAG     0.64
 ATOM NH1  NC2    -0.80
 ATOM HH11 HC      0.46
 ATOM HH12 HC      0.46
@@ -1109,7 +1111,7 @@ GROUP
 ATOM CE1  CA     -0.115
 ATOM HE1  HP      0.115
 GROUP
-ATOM CZ   CA      0.11
+ATOM CZ   CAB     0.11
 ATOM OH   OH1    -0.54
 ATOM HH   H       0.43
 GROUP
