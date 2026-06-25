@@ -24,7 +24,7 @@ def write_stage_conf(
     previous_prefix: str | None,
     conf_dir: str,
     system_dir: str = "../system",
-    output_dir: str = "../output",
+    output_dir: str = "../results",
 ) -> str:
     os.makedirs(conf_dir, exist_ok=True)
     prefix = stage.output_prefix(index)
@@ -41,7 +41,7 @@ def stage_conf_text(
     index: int,
     previous_prefix: str | None,
     system_dir: str = "../system",
-    output_dir: str = "../output",
+    output_dir: str = "../results",
 ) -> str:
     prefix = stage.output_prefix(index)
     out_prefix = f"{output_dir}/{prefix}"

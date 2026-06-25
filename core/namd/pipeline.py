@@ -156,11 +156,11 @@ def default_pipeline() -> Pipeline:
                 restraints=_restraint(5.0),
                 output=_out(),
             ),
-            _md_stage("heat", "NVT", ns=0.124, k=5.0, ramp=True),
+            _md_stage("heat", "NVT", ns=0.125, k=5.0, ramp=True),
             _md_stage("eq_npt_restraint_5", "NPT", ns=0.5, k=5.0),
             _md_stage("eq_npt_restraint_1", "NPT", ns=0.5, k=1.0),
             _md_stage("eq_npt_free", "NPT", ns=0.5, k=0.0),
-            _md_stage("production", "NPT", ns=10.0, k=0.0),
+            _md_stage("production", "NPT", ns=500.0, k=0.0),
         ],
     )
 
@@ -195,16 +195,16 @@ def production_only_pipeline() -> Pipeline:
     return Pipeline(
         name="Production only from restart",
         stages=[
-            _md_stage("production", "NPT", ns=10.0, chunks=1),
+            _md_stage("production", "NPT", ns=500.0, chunks=1),
         ],
     )
 
 
 def chunked_production_pipeline() -> Pipeline:
     return Pipeline(
-        name="Chunked production 100 ns",
+        name="Chunked production 500 ns",
         stages=[
-            _md_stage("production", "NPT", ns=100.0, chunks=10),
+            _md_stage("production", "NPT", ns=500.0, chunks=10),
         ],
     )
 
@@ -226,7 +226,7 @@ def membrane_relax_pipeline() -> Pipeline:
             _md_stage("eq_npat_k5", "NPAT", ns=0.5, k=5.0, system_type="membrane"),
             _md_stage("eq_semiiso_npt_k2", "NPT", ns=1.0, k=2.0, system_type="membrane"),
             _md_stage("eq_semiiso_npt_free", "NPT", ns=1.0, k=0.0, system_type="membrane"),
-            _md_stage("production_semiiso_npt", "NPT", ns=20.0, k=0.0, system_type="membrane"),
+            _md_stage("production_semiiso_npt", "NPT", ns=500.0, k=0.0, system_type="membrane"),
         ],
     )
 
@@ -246,7 +246,7 @@ def membrane_surface_tension_pipeline() -> Pipeline:
             _md_stage("heat_nvt", "NVT", ns=0.25, k=10.0, ramp=True),
             _md_stage("eq_npat", "NPAT", ns=1.0, k=5.0, system_type="membrane"),
             _md_stage("eq_npgt", "NPgT", ns=1.0, k=1.0, system_type="membrane"),
-            _md_stage("production_npgt", "NPgT", ns=20.0, k=0.0, system_type="membrane"),
+            _md_stage("production_npgt", "NPgT", ns=500.0, k=0.0, system_type="membrane"),
         ],
     )
 
@@ -255,7 +255,7 @@ def membrane_production_pipeline() -> Pipeline:
     return Pipeline(
         name="Membrane production from restart",
         stages=[
-            _md_stage("production_semiiso_npt", "NPT", ns=20.0, chunks=1, system_type="membrane"),
+            _md_stage("production_semiiso_npt", "NPT", ns=500.0, chunks=1, system_type="membrane"),
         ],
     )
 
@@ -266,7 +266,7 @@ def template_library() -> dict[str, Pipeline]:
         "Quick smoke test": quick_test_pipeline(),
         "Cautious equilibration": cautious_equilibration_pipeline(),
         "Production only from restart": production_only_pipeline(),
-        "Chunked production 100 ns": chunked_production_pipeline(),
+        "Chunked production 500 ns": chunked_production_pipeline(),
         "Membrane gentle relax": membrane_relax_pipeline(),
         "Membrane surface tension": membrane_surface_tension_pipeline(),
         "Membrane production from restart": membrane_production_pipeline(),

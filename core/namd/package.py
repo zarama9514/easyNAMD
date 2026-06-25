@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 
 from core.namd.conf_writer import write_stage_conf
@@ -31,6 +32,8 @@ def generate_package(
     system: SystemConfig,
     pipeline: Pipeline,
     package_dir: str,
+    namd_command: str = "namd3",
+    namd_threads: int = 8,
     copy_inputs: bool = True,
 ) -> dict[str, list[str] | str]:
     problems, warnings = validate_pipeline_report(system, pipeline)
@@ -39,10 +42,10 @@ def generate_package(
 
     system.infer_stem()
     conf_dir = os.path.join(package_dir, "conf")
-    output_dir = os.path.join(package_dir, "output")
+    results_dir = os.path.join(package_dir, "results")
     system_dir = os.path.join(package_dir, "system")
     template_dir = os.path.join(package_dir, "templates")
-    for path in (conf_dir, output_dir, system_dir, template_dir):
+    for path in (conf_dir, results_dir, system_dir, template_dir):
         os.makedirs(path, exist_ok=True)
 
     stages = pipeline.expanded_stages()
@@ -75,6 +78,7 @@ def generate_package(
             index,
             stage_restart_source(stage, previous_prefix),
             conf_dir,
+            output_dir="../results",
         ))
         previous_prefix = stage.output_prefix(index)
 
@@ -92,7 +96,8 @@ def generate_package(
             "inspection": inspection.to_dict(),
             "warnings": warnings,
         }, f, indent=2)
-    readme = _write_readme(package_dir, pipeline)
+    run_script = _write_run_script(package_dir, system, confs, namd_command, namd_threads)
+    readme = _write_readme(package_dir, pipeline, os.path.basename(run_script))
     protocol = write_protocol(
         os.path.join(package_dir, "protocol.md"),
         system,
@@ -109,6 +114,7 @@ def generate_package(
         "summary": summary_path,
         "readme": readme,
         "protocol": protocol,
+        "run_script": run_script,
     }
 
 
@@ -124,16 +130,71 @@ def _copy_unique(paths: list[str], dest_dir: str):
         shutil.copy2(path, os.path.join(dest_dir, name))
 
 
-def _write_readme(package_dir: str, pipeline: Pipeline) -> str:
+def _write_run_script(
+    package_dir: str,
+    system: SystemConfig,
+    confs: list[str],
+    namd_command: str,
+    namd_threads: int,
+) -> str:
+    script_name = f"{_safe_script_stem(system.stem or os.path.basename(package_dir))}_run.sh"
+    path = os.path.join(package_dir, script_name)
+    command = namd_command.strip() if namd_command else "namd3"
+    threads = max(1, int(namd_threads or 1))
+    lines = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'cd "$(dirname "$0")"',
+        "",
+        f"NAMD_DEFAULT={shlex.quote(command)}",
+        f"NAMD_THREADS_DEFAULT={threads}",
+        'NAMD="${NAMD:-$NAMD_DEFAULT}"',
+        'NAMD_THREADS="${NAMD_THREADS:-$NAMD_THREADS_DEFAULT}"',
+        "",
+        "mkdir -p results",
+        "",
+        "run_stage() {",
+        '  local conf="$1"',
+        "  local stem",
+        '  stem="$(basename "$conf" .conf)"',
+        '  echo "[$(date)] easyNAMD: running $conf"',
+        '  "$NAMD" +p"$NAMD_THREADS" "$conf" > "results/${stem}.log" 2>&1',
+        '  echo "[$(date)] easyNAMD: finished $conf"',
+        "}",
+        "",
+    ]
+    for conf in confs:
+        lines.append(f"run_stage {shlex.quote(os.path.join('conf', os.path.basename(conf)))}")
+    lines += [
+        "",
+        'echo "easyNAMD: all stages finished. Results are in ./results"',
+    ]
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(path, 0o755)
+    return path
+
+
+def _safe_script_stem(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in value.strip())
+    return cleaned.strip("_") or "system"
+
+
+def _write_readme(package_dir: str, pipeline: Pipeline, run_script_name: str) -> str:
     path = os.path.join(package_dir, "README_run.txt")
     lines = [
         "easyNAMD NAMD package",
         "",
-        "Run the configs sequentially with the NAMD command used on your server.",
+        "Run the whole pipeline sequentially:",
+        f"  ./{run_script_name}",
+        "",
+        "Override the launch command or thread count when needed:",
+        f"  NAMD=/path/to/namd3 NAMD_THREADS=16 ./{run_script_name}",
+        "",
+        "The generated script uses NAMD's +p<N> multicore flag and stops on the first failed stage.",
         "Examples:",
-        "  namd3 conf/01_minimize.conf > 01_minimize.log",
-        "  namd3 +p8 conf/02_heat.conf > 02_heat.log",
-        "  CUDA_VISIBLE_DEVICES=0 namd3 +p4 conf/03_production.conf > 03_production.log",
+        f"  ./{run_script_name}",
+        f"  CUDA_VISIBLE_DEVICES=0 NAMD_THREADS=8 ./{run_script_name}",
         "",
         "For SLURM, wrap those commands in your local sbatch script.",
         "",
@@ -145,7 +206,7 @@ def _write_readme(package_dir: str, pipeline: Pipeline) -> str:
         "",
         "Protocol summary: protocol.md",
         "Edit conf/*.conf or templates/pipeline.json if your cluster requires changes.",
-        "Trajectories and restarts are written to output/.",
+        "Trajectories, restarts, and logs are written to results/.",
     ]
     with open(path, "w") as f:
         f.write("\n".join(lines) + "\n")

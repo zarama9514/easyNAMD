@@ -91,8 +91,9 @@ def write_protocol(
     lines += [
         "",
         "## Running",
-        "Run the generated `conf/*.conf` files sequentially with the NAMD command "
-        "appropriate for your server or cluster scheduler.",
+        "Run the generated `*_run.sh` script from the package root. It executes "
+        "`conf/*.conf` sequentially, writes logs to `results/`, and can be wrapped "
+        "by your local server or cluster scheduler.",
     ]
     if warnings:
         lines += ["", "## Warnings"]

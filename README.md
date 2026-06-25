@@ -22,10 +22,10 @@ commercially without the author's personal permission.
   solvation, ionization, charge/atom-count checks, and cell-vector export.
 - Generate NAMD packages: one `.conf` per enabled stage, restart chaining,
   editable MD defaults, membrane-aware pressure control, package validation,
-  previews, and protocol/provenance summaries.
-- Keep execution environment choices outside the GUI: CPU/GPU selection, scheduler
-  scripts, modules, and extra NAMD launch flags are handled by your local run
-  command or cluster wrapper.
+  previews, a sequential `*_run.sh`, and protocol/provenance summaries.
+- Keep cluster-specific choices outside the GUI: GPU selection, scheduler
+  scripts, modules, and extra NAMD launch flags can be added around the generated
+  run script.
 
 ## Beta Status
 
@@ -39,8 +39,8 @@ Known limitations:
   planned but not part of the beta core.
 - Bond/angle/torsion harmonic restraints, Colvars, aMD, metadynamics, ABF, and
   other enhanced-sampling workflows are future advanced features.
-- The generated package does not include `run.sh`, SLURM, PBS, or module-loading
-  scripts.
+- The generated package includes a local sequential shell script, but not SLURM,
+  PBS, module-loading, or site-specific GPU wrapper scripts.
 - Ligand correctness still depends on the user providing valid topology and
   parameter files.
 - VMD visualization is a helper for inspection, not a replacement for careful
@@ -62,7 +62,8 @@ Python dependencies are intentionally small: `customtkinter`.
 uv run python main.py
 ```
 
-On first launch, set the VMD binary in **Settings**. The path can be changed later.
+On first launch, set the VMD and NAMD binaries in **Settings**. These paths can be
+changed later.
 
 ## Main Tabs
 
@@ -115,11 +116,12 @@ Generated package layout:
 namd/
   conf/                     # one .conf per enabled/expanded stage
   system/                   # copied psf/pdb/cell/parameter/restart inputs
-  output/                   # NAMD outputs
+  results/                  # trajectories, restarts, and logs
   templates/pipeline.json
   namd_config_summary.json
   protocol.md
   README_run.txt
+  <system>_run.sh
 ```
 
 ## Force Fields
@@ -144,9 +146,11 @@ Before giving easyNAMD to a tester, check:
 
 - macOS GUI launches with `uv run python main.py`.
 - VMD path is configured in **Settings**.
+- NAMD path and default `+p` thread count are configured in **Settings**.
 - Prepare can open a representative PDB and save a cleaned PDB.
 - Build can preview Tcl and either complete or fail with a readable VMD/psfgen log.
-- Simulate can generate a package and write `protocol.md`.
+- Simulate can generate a package, write `protocol.md`, and create executable
+  `<system>_run.sh`.
 - Linux/NAMD GPU execution is treated as tester feedback territory: device
   selection should be done outside easyNAMD with `CUDA_VISIBLE_DEVICES`, `+devices`,
   scheduler options, or local wrapper scripts.
@@ -202,10 +206,11 @@ select the `.coor`, `.vel`, and `.xsc` files for that stage.
 ### 5. GPU Runs
 
 `CUDASOAintegrate auto` writes GPU-resident integration `on` for MD stages and
-`off` for minimization. Select the actual GPU outside easyNAMD, for example:
+`off` for minimization. The generated `<system>_run.sh` uses the configured NAMD
+binary and `+p` thread count. Select the actual GPU outside easyNAMD, for example:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 namd3 +devices 0 conf/06_production.conf
+CUDA_VISIBLE_DEVICES=0 NAMD_THREADS=8 ./system_run.sh
 ```
 
 Cluster launch details are intentionally left to your site-specific wrapper or

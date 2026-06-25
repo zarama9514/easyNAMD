@@ -732,7 +732,13 @@ class SimulatePanel(ctk.CTkFrame):
             messagebox.showerror("Error", "Select a package directory.")
             return
         try:
-            result = generate_package(system, pipeline, package_dir)
+            result = generate_package(
+                system,
+                pipeline,
+                package_dir,
+                namd_command=self.config.get("namd_path", "").strip() or "namd3",
+                namd_threads=int(self.config.get("namd_threads", 8) or 8),
+            )
         except Exception as e:
             self._set_log(str(e))
             messagebox.showerror("NAMD package", str(e))
@@ -741,6 +747,7 @@ class SimulatePanel(ctk.CTkFrame):
             "Generated NAMD package:\n"
             f"{result['package_dir']}\n\n"
             f"Configs: {len(result['confs'])}\n"
+            f"Run script: {result['run_script']}\n"
             f"Protocol: {result['protocol']}\n"
             f"Summary: {result['summary']}"
         )

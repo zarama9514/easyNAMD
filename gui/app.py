@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
@@ -18,6 +19,22 @@ VMD_DEFAULTS = {
     "win32":  r"C:\Program Files (x86)\University of Illinois\VMD\vmd.exe",
 }
 
+NAMD_DEFAULTS = {
+    "darwin": [
+        "~/software/NAMD_3.0.2_MacOS-universal-multicore/namd3",
+        "/usr/local/bin/namd3",
+        "/opt/homebrew/bin/namd3",
+    ],
+    "linux": [
+        "/usr/local/bin/namd3",
+        "/usr/bin/namd3",
+    ],
+    "win32": [
+        r"C:\Program Files\NAMD\namd3.exe",
+        r"C:\Program Files (x86)\NAMD\namd3.exe",
+    ],
+}
+
 
 def load_config() -> dict:
     if os.path.isfile(CONFIG_PATH):
@@ -27,6 +44,8 @@ def load_config() -> dict:
         data = {}
     defaults = {
         "vmd_path": "",
+        "namd_path": "",
+        "namd_threads": 8,
         "default_output_dir": "",
         "namd_system_type": "soluble",
         "namd_rigid_bonds": "all",
@@ -77,8 +96,8 @@ class App(ctk.CTk):
         self.config_data = load_config()
         self.vmd_viewer = VMDViewerController()
 
-        # First-run setup if local VMD is missing.
-        if not self.config_data.get("vmd_path"):
+        # First-run setup if local VMD or NAMD is missing.
+        if not self.config_data.get("vmd_path") or not self.config_data.get("namd_path"):
             self.after(100, self._first_run_setup)
 
         self._build_ui()
@@ -142,18 +161,32 @@ class App(ctk.CTk):
         ctk.CTkEntry(frame, textvariable=self.vmd_var, width=380).grid(row=0, column=1, padx=5, pady=10, sticky="ew")
         ctk.CTkButton(frame, text="Browse", width=80, command=self._browse_vmd).grid(row=0, column=2, padx=5, pady=10)
 
-        ctk.CTkLabel(frame, text="Default output dir:").grid(row=1, column=0, sticky="w", padx=10, pady=10)
+        ctk.CTkLabel(frame, text="NAMD binary:").grid(row=1, column=0, sticky="w", padx=10, pady=10)
+        self.namd_var = tk.StringVar(value=self.config_data.get("namd_path", ""))
+        ctk.CTkEntry(frame, textvariable=self.namd_var, width=380).grid(row=1, column=1, padx=5, pady=10, sticky="ew")
+        ctk.CTkButton(frame, text="Browse", width=80, command=self._browse_namd).grid(row=1, column=2, padx=5, pady=10)
+
+        ctk.CTkLabel(frame, text="NAMD threads (+p):").grid(row=2, column=0, sticky="w", padx=10, pady=10)
+        self.namd_threads_var = tk.StringVar(value=str(self.config_data.get("namd_threads", 8)))
+        ctk.CTkEntry(frame, textvariable=self.namd_threads_var, width=120).grid(row=2, column=1, padx=5, pady=10, sticky="w")
+
+        ctk.CTkLabel(frame, text="Default output dir:").grid(row=3, column=0, sticky="w", padx=10, pady=10)
         self.default_outdir_var = tk.StringVar(value=self.config_data.get("default_output_dir", ""))
-        ctk.CTkEntry(frame, textvariable=self.default_outdir_var, width=380).grid(row=1, column=1, padx=5, pady=10, sticky="ew")
-        ctk.CTkButton(frame, text="Browse", width=80, command=self._browse_default_outdir).grid(row=1, column=2, padx=5, pady=10)
+        ctk.CTkEntry(frame, textvariable=self.default_outdir_var, width=380).grid(row=3, column=1, padx=5, pady=10, sticky="ew")
+        ctk.CTkButton(frame, text="Browse", width=80, command=self._browse_default_outdir).grid(row=3, column=2, padx=5, pady=10)
 
         ctk.CTkButton(frame, text="Save settings", command=self._save_settings).grid(
-            row=2, column=0, columnspan=3, pady=20)
+            row=4, column=0, columnspan=3, pady=20)
 
     def _browse_vmd(self):
         path = filedialog.askopenfilename(title="Select VMD binary")
         if path:
             self.vmd_var.set(path)
+
+    def _browse_namd(self):
+        path = filedialog.askopenfilename(title="Select NAMD binary")
+        if path:
+            self.namd_var.set(path)
 
     def _browse_default_outdir(self):
         path = filedialog.askdirectory(title="Select default output directory")
@@ -162,6 +195,8 @@ class App(ctk.CTk):
 
     def _save_settings(self):
         self.config_data["vmd_path"] = self.vmd_var.get().strip()
+        self.config_data["namd_path"] = self.namd_var.get().strip()
+        self.config_data["namd_threads"] = max(1, int(self.namd_threads_var.get() or 1))
         self.config_data["default_output_dir"] = self.default_outdir_var.get().strip()
         self.config_data["namd_system_type"] = self.simulate_panel.system_type_var.get()
         self.config_data["namd_rigid_bonds"] = self.simulate_panel.rigid_bonds_var.get()
@@ -199,6 +234,7 @@ class App(ctk.CTk):
         import sys
         platform = sys.platform
         default_vmd = VMD_DEFAULTS.get(platform, "")
+        default_namd = _detect_namd(platform)
 
         configured = []
         if not self.config_data.get("vmd_path") and default_vmd and os.path.isfile(default_vmd):
@@ -206,8 +242,26 @@ class App(ctk.CTk):
                 self.config_data["vmd_path"] = default_vmd
                 self.vmd_var.set(default_vmd)
                 configured.append("VMD")
+        if not self.config_data.get("namd_path") and default_namd:
+            if messagebox.askyesno("First run", f"Found NAMD at:\n{default_namd}\n\nUse this path?"):
+                self.config_data["namd_path"] = default_namd
+                self.namd_var.set(default_namd)
+                configured.append("NAMD")
         if configured:
             save_config(self.config_data)
+        missing = []
         if not self.config_data.get("vmd_path"):
-            messagebox.showinfo("First run", "Please set the VMD path in the Settings tab.")
+            missing.append("VMD")
+        if not self.config_data.get("namd_path"):
+            missing.append("NAMD")
+        if missing:
+            messagebox.showinfo("First run", f"Please set the {' and '.join(missing)} path in the Settings tab.")
             self.tabs.set("Settings")
+
+
+def _detect_namd(platform: str) -> str:
+    for path in NAMD_DEFAULTS.get(platform, []):
+        expanded = os.path.expanduser(path)
+        if os.path.isfile(expanded):
+            return expanded
+    return shutil.which("namd3") or shutil.which("namd2") or ""
