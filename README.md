@@ -2,115 +2,69 @@
 
 ![easyNAMD logo](docs/assets/easyNAMD_logo_wide.png)
 
-**easyNAMD** is a desktop GUI for preparing VMD/NAMD molecular dynamics projects:
-clean a PDB, build PSF/PDB systems with VMD/psfgen, and generate staged NAMD
-configuration packages.
+**easyNAMD** is a desktop beta GUI for preparing VMD/NAMD molecular dynamics
+projects. It helps clean PDB inputs, inspect molecular edge cases in VMD, build
+CHARMM-style PSF/PDB systems with psfgen, and generate staged NAMD configuration
+packages with a reproducible run script.
 
-The project is currently a **beta preview**. It is intended for real-world testing
-by users who already understand VMD/NAMD workflows. Please do not use this product
-commercially without the author's personal permission.
+This is a **beta preview for experienced VMD/NAMD users**. It is ready for
+feedback on real systems, but it is not a replacement for scientific validation
+of topology, parameters, protonation states, restraints, membranes, ligands, or
+production MD choices.
 
-## What It Does
+Commercial use is not permitted without the author's personal permission. See
+[LICENSE](LICENSE).
 
-- Prepare raw PDB files: choose molecular groups, remove unwanted components,
-  resolve altLoc conformers, assign chains, renumber atoms, and export ligands to
-  `.mol2` through Open Babel.
-- Show molecular context in VMD: group views, histidine environments, and focused
+## Core Capabilities
+
+- PDB cleanup: chains, hetero groups, crystal water, metals, altLocs, atom
+  renumbering, and ligand `.mol2` export through Open Babel.
+- VMD inspection helpers: selected groups, histidine environments, and focused
   altLoc views.
-- Build CHARMM-style systems through VMD/psfgen: protein chains, termini,
-  histidine protonation, disulfides, hetero segments, crystal water, ligands,
-  solvation, ionization, charge/atom-count checks, and cell-vector export.
-- Generate NAMD packages: one `.conf` per enabled stage, restart chaining,
-  editable MD defaults, membrane-aware pressure control, package validation,
-  previews, a sequential `*_run.sh`, and protocol/provenance summaries.
-- Keep cluster-specific choices outside the GUI: GPU selection, scheduler
-  scripts, modules, and extra NAMD launch flags can be added around the generated
-  run script.
-
-## Beta Status
-
-Tested locally on macOS with VMD. Linux/server-side NAMD execution, GPU launch
-conventions, and larger production systems need more beta feedback.
-
-Known limitations:
-
-- Restraints are currently limited to per-stage positional force constants.
-  Native restraint-PDB generation, restraint schedules, and selection builders are
-  planned but not part of the beta core.
-- Bond/angle/torsion harmonic restraints, Colvars, aMD, metadynamics, ABF, and
-  other enhanced-sampling workflows are future advanced features.
-- The generated package includes a local sequential shell script, but not SLURM,
-  PBS, module-loading, or site-specific GPU wrapper scripts.
-- Ligand correctness still depends on the user providing valid topology and
-  parameter files.
-- VMD visualization is a helper for inspection, not a replacement for careful
-  molecular validation.
+- psfgen build flow: termini, histidine states, disulfides, hetero segments,
+  topology/parameter inputs, solvation, ionization, charge checks, and cell
+  export.
+- NAMD package generation: staged `.conf` files, restart chaining, editable MD
+  defaults, membrane-aware pressure modes, package validation, protocol summary,
+  provenance, and an executable `<system>_run.sh`.
+- GPU-aware defaults: `CUDASOAintegrate auto` writes `off` for minimization and
+  `on` for MD stages. Device selection and scheduler details stay outside the
+  GUI.
 
 ## Requirements
 
 - Python 3.11+
 - [uv](https://github.com/astral-sh/uv)
-- [VMD](https://www.ks.uiuc.edu/Research/vmd/) on the machine running the GUI
-- [NAMD](https://www.ks.uiuc.edu/Research/namd/) where generated configs will run
+- [VMD](https://www.ks.uiuc.edu/Research/vmd/) on the GUI machine
+- [NAMD](https://www.ks.uiuc.edu/Research/namd/) where generated configs run
 - [Open Babel](https://openbabel.org/) (`obabel`) for ligand `.pdb -> .mol2`
 
-Python dependencies are intentionally small: `customtkinter`.
+Python dependency surface is intentionally small: `customtkinter`.
 
-## Run
+## Quick Start
 
 ```bash
 uv run python main.py
 ```
 
-On first launch, set the VMD and NAMD binaries in **Settings**. These paths can be
-changed later.
+On first launch, set the VMD and NAMD paths in **Settings**. The generated NAMD
+package can be moved to another machine after it is created.
 
-## Main Tabs
+## Typical Workflow
 
-### Prepare PDB
+1. **Prepare PDB**: load a raw PDB, keep the needed groups, resolve altLocs, and
+   save a cleaned PDB.
+2. **Build**: choose termini, histidines, disulfides, hetero segments, ligand
+   files, solvation, and ionization; then run VMD/psfgen.
+3. **Simulate**: load or auto-fill the built PSF/PDB/cell files, choose a
+   pipeline, validate, preview, and generate the NAMD package.
+4. Run the generated shell script locally or wrap it in your own cluster script:
 
-Use this before Build when the input PDB has extra chains, ligands, crystal
-waters, alternative locations, or model records.
+```bash
+CUDA_VISIBLE_DEVICES=0 NAMD_THREADS=8 ./system_run.sh
+```
 
-Key actions:
-
-- Load a PDB.
-- Keep/drop protein chains, ligands/cofactors, metals, and water.
-- Choose which altLoc conformer to keep.
-- View selected groups or focused altLoc residues in VMD.
-- Optionally export a ligand to `.mol2`.
-- Save a cleaned PDB and send it to Build.
-
-### Build
-
-Build produces the final `.psf`, `.pdb`, and `*_cell.txt` files.
-
-Key actions:
-
-- Select a cleaned or raw PDB.
-- Choose chain termini and histidine states (`HSD`, `HSE`, `HSP`).
-- Review disulfide bonds, Zn/Cys/HIS suggestions, hetero segments, and warnings.
-- Add ligand topology/parameter files.
-- Solvate and ionize.
-- Preview the generated Tcl script.
-- Run VMD headlessly and inspect the live log.
-
-### Simulate
-
-Simulate creates a server-ready NAMD package.
-
-Key actions:
-
-- Load PSF/PDB/cell files manually or from a successful Build run.
-- Pick a pipeline template.
-- Edit stages: minimization, heating, equilibration, production, restart files,
-  timestep, duration, ensemble, temperature, pressure, output frequencies, and
-  chunking.
-- Tune global MD defaults and advanced NAMD options, including
-  `CUDASOAintegrate auto/on/off`.
-- Validate, preview configs, inspect the package plan, and generate the package.
-
-Generated package layout:
+## Generated Package
 
 ```text
 namd/
@@ -124,102 +78,54 @@ namd/
   <system>_run.sh
 ```
 
-## Force Fields
+## Bundled CHARMM Files
 
-Bundled default CHARMM topology/parameter files live in:
+The default topology/parameter files in `topologies/` and `parameters/` are
+refreshed from the official MacKerell Lab CHARMM36 February 2026
+`toppar_c36_feb26.tgz` release. A full text mirror is kept under
+`forcefields/charmm36_feb26/toppar/`.
 
-```text
-topologies/
-parameters/
-```
-
-They are refreshed from the official MacKerell Lab CHARMM36 February 2026
-`toppar_c36_feb26.tgz` release. A complete text-file mirror of that release is
-kept in:
-
-```text
-forcefields/charmm36_feb26/toppar/
-```
-
-Ligand files can be added from the Build tab. Put reusable ligand files in:
+Ligand-specific files can be added from the Build tab or kept in:
 
 ```text
 topologies/ligands/
 parameters/ligands/
 ```
 
-## Beta Checklist
+## Beta Scope
 
-Before giving easyNAMD to a tester, check:
+Currently in scope:
 
-- macOS GUI launches with `uv run python main.py`.
-- VMD path is configured in **Settings**.
-- NAMD path and default `+p` thread count are configured in **Settings**.
-- Prepare can open a representative PDB and save a cleaned PDB.
-- Build can preview Tcl and either complete or fail with a readable VMD/psfgen log.
-- Simulate can generate a package, write `protocol.md`, and create executable
-  `<system>_run.sh`.
-- Linux/NAMD GPU execution is treated as tester feedback territory: device
-  selection should be done outside easyNAMD with `CUDA_VISIBLE_DEVICES`, `+devices`,
-  scheduler options, or local wrapper scripts.
+- soluble protein and protein/ligand system preparation;
+- membrane-aware NAMD config generation;
+- restart-aware staged packages;
+- local sequential NAMD run scripts.
 
-## Sample Workflows
+Not yet core features:
 
-### 1. Soluble Protein In Water
+- native restraint-PDB generation and restraint schedules;
+- harmonic bond/angle/torsion restraints;
+- Colvars, aMD, metadynamics, ABF, and other enhanced-sampling workflows;
+- SLURM/PBS/module wrappers;
+- automated ligand parameter correctness checks.
 
-1. Open **Prepare PDB** and load the raw PDB.
-2. Keep the protein chain(s), required cofactors/metals, and optionally crystal
-   waters.
-3. Resolve altLoc residues if present.
-4. Save the cleaned PDB and send it to **Build**.
-5. In **Build**, check termini, histidines, disulfides, hetero segments, and
-   warnings.
-6. Solvate, ionize, preview the Tcl script, then run Build.
-7. Send the built system to **Simulate**.
-8. Choose **Standard protein in water**, validate, preview, and generate the
-   NAMD package.
+More detail: [Beta release notes](docs/BETA_RELEASE.md).
 
-### 2. Protein With Ligand
+## Examples And Docs
 
-1. Prepare the protein/ligand PDB and keep the ligand group.
-2. Export the ligand to `.mol2` if needed for external parameterization.
-3. Add ligand topology and parameter files in **Build**.
-4. Enable the ligand as a hetero segment and verify its segname.
-5. Build, then inspect the log for missing topology/parameter warnings.
-6. Generate a NAMD package from **Simulate**.
+- [Example workflows](examples/README.md)
+- [1UBQ soluble-protein demo](examples/soluble-protein-1ubq/README.md)
+- [Architecture notes](docs/ARCHITECTURE.md)
+- [Beta release checklist](docs/BETA_RELEASE.md)
+- [Development TODO](TODO.md)
 
-### 3. Membrane System
-
-1. Build or load a system with PSF/PDB/cell files.
-2. In **Simulate**, set **System type** to `membrane`.
-3. Choose a membrane template or set stage ensembles manually.
-4. Use membrane-aware `NPT`, `NPAT`, or `NPgT` stages as appropriate.
-5. Validate before generating the package. Check pressure mode and surface tension
-   in the preview/report.
-
-### 4. Restart Or Continuation
-
-For a full pipeline continuation, set **Start** to `restart` and choose a restart
-prefix matching:
-
-```text
-prefix.restart.coor
-prefix.restart.vel
-prefix.restart.xsc
-```
-
-For a single stage override, use the `restart files` button in the stage table and
-select the `.coor`, `.vel`, and `.xsc` files for that stage.
-
-### 5. GPU Runs
-
-`CUDASOAintegrate auto` writes GPU-resident integration `on` for MD stages and
-`off` for minimization. The generated `<system>_run.sh` uses the configured NAMD
-binary and `+p` thread count. Select the actual GPU outside easyNAMD, for example:
+## Smoke Tests
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 NAMD_THREADS=8 ./system_run.sh
+uv run python -m unittest discover -s tests
+uv run python -B -m py_compile main.py gui/*.py core/*.py core/namd/*.py
 ```
 
-Cluster launch details are intentionally left to your site-specific wrapper or
-scheduler script.
+The smoke suite covers shared CHARMM aliases, Python-written psfgen input PDBs,
+altLoc focus PDB generation, package filename-collision checks, and NAMD GPU
+integration defaults.

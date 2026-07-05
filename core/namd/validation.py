@@ -57,6 +57,10 @@ def validate_pipeline_report(system: SystemConfig, pipeline: Pipeline) -> tuple[
             problems.append(f"Parameter file is missing: {path}")
         elif os.path.getsize(path) == 0:
             warnings.append(f"Parameter file is empty: {path}")
+    _validate_input_basenames(
+        [system.psf, system.pdb, system.cell_file, *system.parameter_files],
+        problems,
+    )
 
     stages = pipeline.expanded_stages()
     if not stages:
@@ -64,6 +68,22 @@ def validate_pipeline_report(system: SystemConfig, pipeline: Pipeline) -> tuple[
     _validate_stages(system, stages, problems, warnings)
     _validate_global_settings(system, stages, warnings)
     return problems, warnings
+
+
+def _validate_input_basenames(paths: list[str], problems: list[str]):
+    seen: dict[str, str] = {}
+    for path in paths:
+        if not path:
+            continue
+        name = os.path.basename(path)
+        absolute = os.path.abspath(path)
+        existing = seen.get(name)
+        if existing is None:
+            seen[name] = absolute
+        elif existing != absolute:
+            problems.append(
+                f"Input filename collision: both '{existing}' and '{absolute}' would copy as '{name}'."
+            )
 
 
 def _validate_stages(

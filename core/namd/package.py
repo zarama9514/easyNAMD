@@ -119,14 +119,19 @@ def generate_package(
 
 
 def _copy_unique(paths: list[str], dest_dir: str):
-    seen = set()
+    seen: dict[str, str] = {}
     for path in paths:
         if not path or not os.path.isfile(path):
             continue
         name = os.path.basename(path)
-        if name in seen:
+        existing = seen.get(name)
+        if existing == os.path.abspath(path):
             continue
-        seen.add(name)
+        if existing is not None:
+            raise ValueError(
+                f"Input filename collision: both '{existing}' and '{path}' would copy as '{name}'."
+            )
+        seen[name] = os.path.abspath(path)
         shutil.copy2(path, os.path.join(dest_dir, name))
 
 

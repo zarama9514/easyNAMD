@@ -13,11 +13,9 @@ A 3.0 Å cutoff captures the first shell without catching the next (~4 Å+).
 
 from dataclasses import dataclass
 
-# common coordinating metal ion resnames (PDB / CHARMM)
-METAL_RESNAMES = {
-    "ZN", "ZN2", "CD", "CD2", "CO", "NI", "FE", "FE2", "FE3",
-    "MN", "MN3", "CU", "CU1", "CU2", "HG", "MG", "CA", "CAL",
-}
+from core import pdb_fields as pdbf
+from core.charmm import COORDINATING_METAL_RESNAMES
+
 CYS_CUTOFF = 3.0   # Å, metal–SG
 HIS_CUTOFF = 3.0   # Å, metal–N
 
@@ -40,10 +38,7 @@ def _dist2(a, b):
 
 
 def _xyz(line):
-    try:
-        return (float(line[30:38]), float(line[38:46]), float(line[46:54]))
-    except ValueError:
-        return None
+    return pdbf.xyz(line)
 
 
 def detect_zinc_coordination(pdb_file: str):
@@ -54,17 +49,17 @@ def detect_zinc_coordination(pdb_file: str):
 
     with open(pdb_file) as f:
         for line in f:
-            if line[:6].strip() not in ("ATOM", "HETATM"):
+            if not pdbf.is_atom_record(line):
                 continue
             xyz = _xyz(line)
             if xyz is None:
                 continue
-            resname = line[17:20].strip()
-            atom    = line[12:16].strip()
-            chain   = line[21].strip() if len(line) > 21 else ""
-            resid   = line[22:26].strip() if len(line) > 25 else ""
+            resname = pdbf.resname(line)
+            atom = pdbf.atom_name(line)
+            chain = pdbf.chain_id(line)
+            resid = pdbf.resid(line)
 
-            if resname in METAL_RESNAMES:
+            if resname in COORDINATING_METAL_RESNAMES:
                 zincs.append(xyz)
             elif resname == "CYS" and atom == "SG":
                 cys_sg[(chain, resid)] = xyz

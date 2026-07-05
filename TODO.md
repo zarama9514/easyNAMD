@@ -4,7 +4,16 @@
 
 - [ ] Test the full soluble-protein workflow on a second macOS machine.
 - [ ] Collect Linux/NAMD3 GPU launch feedback from beta testers.
-- [ ] Add one small public demo system or documented test input.
+- [x] Add one small public demo system or documented test input.
+- [ ] Add smoke fixtures for ligand and membrane-ish systems.
+- [ ] Keep expanding tests around VMD Tcl generation and psfgen script output.
+- [x] Add public beta release notes, architecture notes, and example workflows.
+
+## Internal cleanup
+
+- [ ] Split BuildPanel into smaller state, view, and runner modules.
+- [ ] Move more fixed-width PDB handling onto the shared `core.pdb_fields` helpers.
+- [ ] Add a topology/parameter manager that explains which residues are covered.
 
 ## VMD viewing
 

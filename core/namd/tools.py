@@ -3,22 +3,15 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from core.molecule_groups import METAL_RESNAMES, PROTEIN_RESNAMES, WATER_RESNAMES
-
-LIPID_RESNAMES = frozenset({
-    "DLPC", "DMPC", "DPPC", "DSPC", "DOPC", "POPC", "SOPC", "PLPC",
-    "POPE", "DOPE", "DPPE", "POPG", "DOPG", "POPS", "DOPS", "POPA",
-    "DOPA", "CARD", "TOCL", "CHL1", "CHOL", "ERG", "CER", "SPH",
-    # Common 3-character truncations seen in fixed-width PDB exports.
-    "DLP", "DMP", "DPP", "DSP", "DOP", "POP", "SOP", "PLP", "POE",
-    "DOG", "POS", "DOS", "POA", "DOA", "CAR", "TOC", "CHL",
-})
-
-BACKBONE_ATOMS = frozenset({"N", "CA", "C", "O", "HN", "HA"})
-LIPID_HEADGROUP_ATOMS = frozenset({
-    "P", "O11", "O12", "O13", "O14", "N", "C11", "C12", "C13", "C14",
-    "C15", "O21", "O22", "O31", "O32",
-})
+from core import pdb_fields as pdbf
+from core.charmm import (
+    BACKBONE_ATOMS,
+    LIPID_HEADGROUP_ATOMS,
+    LIPID_RESNAMES,
+    METAL_RESNAMES,
+    PROTEIN_RESNAMES,
+    WATER_RESNAMES,
+)
 
 
 @dataclass
@@ -62,7 +55,7 @@ def detect_system(pdb_path: str) -> SystemSummary:
 
     with open(pdb_path) as f:
         for line in f:
-            if line[:6].strip() not in ("ATOM", "HETATM"):
+            if not pdbf.is_atom_record(line):
                 continue
             summary.atoms += 1
             atom = _atom_name(line)
@@ -102,7 +95,7 @@ def count_pdb_atoms(path: str) -> int:
     count = 0
     with open(path) as f:
         for line in f:
-            if line[:6].strip() in ("ATOM", "HETATM"):
+            if pdbf.is_atom_record(line):
                 count += 1
     return count
 
@@ -151,7 +144,7 @@ def write_restraint_pdb(input_pdb: str, output_pdb: str, selection: str, force_c
     selected = 0
     with open(input_pdb) as src, open(output_pdb, "w") as dst:
         for line in src:
-            if line[:6].strip() in ("ATOM", "HETATM"):
+            if pdbf.is_atom_record(line):
                 k = force_constant if atom_matches_selection(line, selection) else 0.0
                 if k > 0:
                     selected += 1
@@ -344,36 +337,20 @@ def _with_beta(line: str, beta: float) -> str:
 
 
 def _atom_name(line: str) -> str:
-    return line[12:16].strip().upper() if len(line) >= 16 else ""
+    return pdbf.atom_name(line)
 
 
 def _resname(line: str) -> str:
-    candidates = []
-    for start, end in ((17, 21), (16, 20), (17, 20), (16, 19)):
-        if len(line) >= end:
-            value = line[start:end].strip().upper()
-            if value:
-                candidates.append(value)
-    known = PROTEIN_RESNAMES | WATER_RESNAMES | LIPID_RESNAMES | METAL_RESNAMES
-    for value in sorted(candidates, key=len, reverse=True):
-        if len(value) >= 3 and value in known:
-            return value
-    for value in candidates:
-        if len(value) == 3 and value.isalnum():
-            return value
-    for value in sorted(candidates, key=len, reverse=True):
-        if value in known:
-            return value
-    return candidates[0] if candidates else ""
+    return pdbf.resname(line)
 
 
 def _chain(line: str) -> str:
-    return line[21].strip() if len(line) > 21 else ""
+    return pdbf.chain_id(line)
 
 
 def _resid(line: str) -> str:
-    return line[22:26].strip() if len(line) >= 26 else ""
+    return pdbf.resid(line)
 
 
 def _segname(line: str) -> str:
-    return line[72:76].strip() if len(line) >= 76 else ""
+    return pdbf.segname(line)

@@ -1,4 +1,5 @@
 import os
+import queue
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
@@ -6,10 +7,12 @@ import customtkinter as ctk
 
 import json
 
+from core.charmm import DEFAULT_TOPOLOGY_STREAMS
 from core.pdb_parser import (
     HeteroResidue, HeteroSegment, HisResidue, Patch, PDBInfo, SegmentConfig,
     find_disulfides_by_distance, find_hetero_residues, parse_pdb,
 )
+from core.molecule_groups import build_residue_focus_scene_pdb
 from core.coverage import uncovered_built_residues
 from core.zinc import detect_zinc_coordination
 from core.naming import stem as file_stem, structure_dir
@@ -46,6 +49,10 @@ def collect_files(folder: str, extensions: tuple) -> list[str]:
 
 def section_label(parent, text: str) -> ctk.CTkLabel:
     return ctk.CTkLabel(parent, text=text, font=ctk.CTkFont(weight="bold"))
+
+
+def _namd_system_files_exist(data: dict) -> bool:
+    return all(os.path.isfile(data.get(key, "")) for key in ("psf", "pdb", "cell"))
 
 
 def _is_nonfatal_toppar_stream_message(low_line: str) -> bool:
@@ -96,6 +103,7 @@ class BuildPanel(ctk.CTkFrame):
         self.vmd_viewer = vmd_viewer
         self._on_build_success = on_build_success
         self.pdb_info: PDBInfo | None = None
+        self._last_namd_system: dict | None = None
 
         # dynamic widget state
         self.segment_rows: list[dict] = []   # {chain, first_var, last_var}
@@ -110,6 +118,8 @@ class BuildPanel(ctk.CTkFrame):
         self.ligand_topology_files:  list[str] = []
         self.ligand_parameter_files: list[str] = []
         self._problems: list[str] = []
+        self._vmd_event_queue: queue.Queue | None = None
+        self._vmd_pump_after_id: str | None = None
 
         self._build_ui()
 
@@ -299,7 +309,16 @@ class BuildPanel(ctk.CTkFrame):
         self._load_pdb(path)
 
     def current_namd_system(self) -> dict | None:
-        """Return the final Build output paths for the Simulate tab."""
+        """Return the latest completed Build output paths for the Simulate tab."""
+        if self._last_namd_system and _namd_system_files_exist(self._last_namd_system):
+            return dict(self._last_namd_system)
+        data = self._expected_namd_system()
+        if data and _namd_system_files_exist(data):
+            return data
+        return None
+
+    def _expected_namd_system(self) -> dict | None:
+        """Return the expected final Build output paths from current settings."""
         pdb = self.pdb_var.get().strip()
         outdir = self.outdir_var.get().strip()
         if not pdb or not outdir:
@@ -619,13 +638,22 @@ class BuildPanel(ctk.CTkFrame):
             return
         vmd = self.config.get("vmd_path", "").strip()
         try:
-            self.vmd_viewer.show_residue_focus(vmd, pdb, chain, resid, title=f"{chain}:{resid}")
+            focus_pdb = build_residue_focus_scene_pdb(pdb, chain, resid)
+            if not focus_pdb:
+                messagebox.showerror("VMD viewer", f"Residue {chain}:{resid} was not found.")
+                return
+            self.vmd_viewer.show_pdb_focus(vmd, focus_pdb, title=f"{chain}:{resid}",
+                                           target_chain=chain, target_resid=resid)
         except Exception as exc:
             messagebox.showerror("VMD viewer", str(exc))
 
     def _collect_topology_files(self) -> list[str]:
-        # .str (CHARMM stream) files also carry RESI topology definitions
-        return collect_files(TOPOLOGIES_DIR, (".rtf", ".top", ".str")) + self.ligand_topology_files
+        topology_files = collect_files(TOPOLOGIES_DIR, (".rtf", ".top"))
+        topology_files.extend(
+            path for name in DEFAULT_TOPOLOGY_STREAMS
+            if os.path.isfile(path := os.path.join(TOPOLOGIES_DIR, name))
+        )
+        return topology_files + self.ligand_topology_files
 
     def _collect_parameter_files(self) -> list[str]:
         return collect_files(PARAMETERS_DIR, (".prm", ".str")) + self.ligand_parameter_files
@@ -973,13 +1001,48 @@ class BuildPanel(ctk.CTkFrame):
         self.log_box.configure(state="disabled")
         self._log(f"Running VMD: {script}")
 
+        self._start_vmd_event_pump()
         run_vmd(
             vmd_path=vmd,
             tcl_script=script,
-            on_output=lambda line: self.after(0, self._log, line),
-            on_done=lambda ok: self.after(0, self._on_done, ok),
+            on_output=lambda line: self._queue_vmd_event(("output", line)),
+            on_done=lambda ok: self._queue_vmd_event(("done", ok)),
             cwd=self.outdir_var.get().strip(),
         )
+
+    def _queue_vmd_event(self, event):
+        if self._vmd_event_queue is not None:
+            self._vmd_event_queue.put(event)
+
+    def _start_vmd_event_pump(self):
+        self._vmd_event_queue = queue.Queue()
+        if self._vmd_pump_after_id:
+            try:
+                self.after_cancel(self._vmd_pump_after_id)
+            except Exception:
+                pass
+        self._vmd_pump_after_id = self.after(50, self._drain_vmd_events)
+
+    def _drain_vmd_events(self):
+        if self._vmd_event_queue is None:
+            self._vmd_pump_after_id = None
+            return
+        done_seen = False
+        while True:
+            try:
+                kind, payload = self._vmd_event_queue.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "output":
+                self._log(payload)
+            elif kind == "done":
+                done_seen = True
+                self._on_done(payload)
+        if done_seen:
+            self._vmd_event_queue = None
+            self._vmd_pump_after_id = None
+            return
+        self._vmd_pump_after_id = self.after(50, self._drain_vmd_events)
 
     def _on_done(self, success: bool):
         self._building = False
@@ -989,9 +1052,11 @@ class BuildPanel(ctk.CTkFrame):
             messagebox.showerror("Failed", "VMD exited with an error.")
             return
         self._log("\nBuild complete.")
+        data = self._expected_namd_system()
+        self._last_namd_system = data if data and _namd_system_files_exist(data) else None
         self._show_sanity_check(problems)
-        if self._on_build_success:
-            self._on_build_success(self.current_namd_system())
+        if self._on_build_success and self._last_namd_system:
+            self._on_build_success(dict(self._last_namd_system))
 
     def _show_sanity_check(self, problems: list[str]):
         """Pop a window summarising whether the built system looks OK."""
@@ -1000,6 +1065,7 @@ class BuildPanel(ctk.CTkFrame):
         final = stem + ("_solvated_ionized" if self.ionize_var.get() else "_solvated")
         psf = os.path.join(outdir, final + ".psf")
         pdb = os.path.join(outdir, final + ".pdb")
+        cell = os.path.join(outdir, final + "_cell.txt")
 
         charge = getattr(self, "_charge", None)
         atoms  = getattr(self, "_atoms", None)
@@ -1007,6 +1073,8 @@ class BuildPanel(ctk.CTkFrame):
         checks = []   # (ok, text)
         checks.append((os.path.isfile(psf) and os.path.isfile(pdb),
                        f"Output files written ({final}.psf / .pdb)"))
+        checks.append((os.path.isfile(cell),
+                       f"NAMD cell file written ({final}_cell.txt)"))
         if charge is not None:
             checks.append((abs(charge) < 0.01,
                            f"Net charge ≈ {charge:+.3f} e  (should be ~0)"))

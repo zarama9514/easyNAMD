@@ -1,48 +1,20 @@
 import os
+from core import pdb_fields as pdbf
+from core.charmm import (
+    PDB_TO_CHARMM_ATOM_ALIASES,
+    PDB_TO_CHARMM_RESIDUE_ALIASES,
+    PROTEIN_RESNAMES,
+    WATER_RESNAMES,
+)
 from core.pdb_parser import HeteroSegment, HisResidue, Patch, SegmentConfig
-
-
-# ------------------------------------------------------------------ #
-#  Standard CHARMM36 aliases                                           #
-# ------------------------------------------------------------------ #
-
-# These cover the most common PDB→CHARMM36 name mismatches.
-_RESIDUE_ALIASES = [
-    ("HIS", "HSD"),   # default HIS protonation; per-residue overrides via mutate
-    ("HOH", "TIP3"),
-    ("HID", "HSD"),
-    ("HIE", "HSE"),
-    ("HIP", "HSP"),
-    # ions: PDB name → CHARMM36 toppar_water_ions resname
-    ("NA",  "SOD"),
-    ("CL",  "CLA"),
-    ("K",   "POT"),
-    ("CA",  "CAL"),
-    ("MG",  "MG"),
-    ("ZN",  "ZN2"),
-    ("CD",  "CD2"),
-    ("LI",  "LIT"),
-    ("RB",  "RUB"),
-    ("CS",  "CES"),
-    ("BA",  "BAR"),
-]
-
-_ATOM_ALIASES = [
-    ("ILE", "CD1", "CD"),    # ILE delta carbon
-    ("HOH", "O",   "OH2"),   # TIP3 oxygen
-    ("*",   "OXT", "OT2"),   # C-terminal oxygen
-    ("*",   "H",   "HN"),    # backbone amide H (many PDBs use H instead of HN)
-    ("*",   "O1",  "OT1"),
-    ("*",   "O2",  "OT2"),
-]
 
 
 def _tcl_aliases() -> str:
     lines = ["# --- Standard CHARMM36 aliases ---"]
-    for pdb_name, charmm_name in _RESIDUE_ALIASES:
+    for pdb_name, charmm_name in PDB_TO_CHARMM_RESIDUE_ALIASES:
         lines.append(f"pdbalias residue {pdb_name} {charmm_name}")
     lines.append("")
-    for resname, pdb_atom, charmm_atom in _ATOM_ALIASES:
+    for resname, pdb_atom, charmm_atom in PDB_TO_CHARMM_ATOM_ALIASES:
         lines.append(f"pdbalias atom {resname} {pdb_atom} {charmm_atom}")
     return "\n".join(lines)
 
@@ -55,27 +27,59 @@ def _hetero_pdb(tmp_dir: str, seg: HeteroSegment) -> str:
     return os.path.join(tmp_dir, f"het_{seg.segname}.pdb")
 
 
-def _tcl_split_chains(pdb_file: str, chains: list[str], tmp_dir: str,
-                      hetero_segments: list[HeteroSegment] | None = None) -> str:
-    """VMD commands to write one PDB per protein chain and per hetero segment."""
+def _chain_pdb(tmp_dir: str, chain: str) -> str:
+    return os.path.join(tmp_dir, f"chain_{chain}.pdb")
+
+
+def _write_split_pdbs(
+    pdb_file: str,
+    segments: list[SegmentConfig],
+    tmp_dir: str,
+    hetero_segments: list[HeteroSegment] | None = None,
+):
+    """Write psfgen input PDBs using the same classification as the GUI."""
     hetero_segments = hetero_segments or []
-    lines = [
-        "# --- Split PDB by chain / hetero residue ---",
-        f'mol load pdb "{pdb_file}"',
-    ]
-    for chain in chains:
-        out = os.path.join(tmp_dir, f"chain_{chain}.pdb")
-        lines.append(f'[atomselect top "protein and chain {chain}"] writepdb "{out}"')
+    with open(pdb_file) as f:
+        lines = f.readlines()
+    for seg in segments:
+        count = _write_filtered_pdb(
+            _chain_pdb(tmp_dir, seg.chain),
+            (
+                line for line in lines
+                if pdbf.is_atom_record(line)
+                and pdbf.chain_id(line) == seg.chain
+                and pdbf.resname(line) in PROTEIN_RESNAMES
+            ),
+        )
+        if count == 0:
+            raise ValueError(f"No protein atoms found for chain '{seg.chain}'.")
     for seg in hetero_segments:
-        if seg.selection:
-            sel = seg.selection
-        else:
-            sel = f'resname {seg.resname}'
-            if seg.chain:
-                sel += f' and chain {seg.chain}'
-        lines.append(f'[atomselect top "{sel}"] writepdb "{_hetero_pdb(tmp_dir, seg)}"')
-    lines.append("mol delete all")
-    return "\n".join(lines)
+        count = _write_filtered_pdb(
+            _hetero_pdb(tmp_dir, seg),
+            (line for line in lines if _matches_hetero_segment(line, seg)),
+        )
+        if count == 0:
+            raise ValueError(f"No atoms found for hetero segment '{seg.segname}' ({seg.resname}).")
+
+
+def _matches_hetero_segment(line: str, seg: HeteroSegment) -> bool:
+    if not pdbf.is_atom_record(line):
+        return False
+    if seg.selection:
+        return seg.selection == "water" and pdbf.resname(line) in WATER_RESNAMES
+    if pdbf.resname(line) != seg.resname.upper():
+        return False
+    return not seg.chain or pdbf.chain_id(line) == seg.chain
+
+
+def _write_filtered_pdb(path: str, lines):
+    serial = 0
+    with open(path, "w") as out:
+        for line in lines:
+            serial += 1
+            out.write(pdbf.set_serial(line, serial))
+        out.write("END\n")
+    return serial
 
 
 def _tcl_hetero_segment(seg: HeteroSegment, pdb_file: str) -> str:
@@ -161,7 +165,7 @@ def tcl_build_psf(
     parameter_lines  = "\n".join(f'readparameters "{p}"' for p in parameter_files)
 
     chain_pdbs = {
-        seg.chain: os.path.join(tmp_dir, f"chain_{seg.chain}.pdb")
+        seg.chain: _chain_pdb(tmp_dir, seg.chain)
         for seg in segments
     }
 
@@ -359,12 +363,10 @@ def write_build_script(
     solvated_prefix = os.path.join(output_dir, base_stem + "_solvated")
     ionized_prefix  = os.path.join(output_dir, base_stem + "_solvated_ionized")
     final_prefix    = ionized_prefix if ionize else solvated_prefix
+    _write_split_pdbs(pdb_file, segments, output_dir, hetero_segments)
 
     blocks = [
         "# easyNAMD — auto-generated build script",
-        "",
-        _tcl_split_chains(pdb_file, [s.chain for s in segments], output_dir,
-                          hetero_segments),
         "",
         tcl_build_psf(
             pdb_file=pdb_file,

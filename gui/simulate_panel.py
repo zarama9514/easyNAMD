@@ -168,28 +168,37 @@ class SimulatePanel(ctk.CTkFrame):
         self._small_field(globals_frame, "Piston decay", self.piston_decay_var, 2, 2, 80)
         self._small_field(globals_frame, "Surface tension", self.surface_tension_var, 2, 4, 80)
 
-        ctk.CTkLabel(scroll, text="Advanced MD settings", font=ctk.CTkFont(weight="bold")).grid(
-            row=row, column=0, columnspan=4, sticky="w", padx=8, pady=(12, 2))
+        advanced_header = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
+        advanced_header.grid(row=row, column=0, columnspan=4, sticky="ew", padx=8, pady=(12, 2))
+        ctk.CTkLabel(advanced_header, text="Advanced MD settings",
+                     font=ctk.CTkFont(weight="bold")).pack(side="left")
+        self.advanced_toggle_btn = ctk.CTkButton(
+            advanced_header,
+            text="Show",
+            width=70,
+            command=self._toggle_advanced_settings,
+        )
+        self.advanced_toggle_btn.pack(side="left", padx=8)
         row += 1
-        advanced = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
-        advanced.grid(row=row, column=0, columnspan=4, sticky="ew", padx=8)
+        self.advanced_frame = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
+        self.advanced_frame.grid(row=row, column=0, columnspan=4, sticky="ew", padx=8)
         row += 1
-        self._small_menu(advanced, "rigidBonds", self.rigid_bonds_var,
+        self._small_menu(self.advanced_frame, "rigidBonds", self.rigid_bonds_var,
                          ["all", "water", "none"], 0, 0, 90)
-        self._small_field(advanced, "nonbondedFreq", self.nonbonded_freq_var, 0, 2, 70)
-        self._small_field(advanced, "fullElectFreq", self.full_elect_var, 0, 4, 70)
-        self._small_field(advanced, "steps/cycle", self.steps_cycle_var, 1, 0, 70)
-        self._small_field(advanced, "pairlists/cycle", self.pairlists_cycle_var, 1, 2, 70)
-        self._small_field(advanced, "margin", self.margin_var, 1, 4, 70)
-        self._small_menu(advanced, "exclude", self.exclude_var,
+        self._small_field(self.advanced_frame, "nonbondedFreq", self.nonbonded_freq_var, 0, 2, 70)
+        self._small_field(self.advanced_frame, "fullElectFreq", self.full_elect_var, 0, 4, 70)
+        self._small_field(self.advanced_frame, "steps/cycle", self.steps_cycle_var, 1, 0, 70)
+        self._small_field(self.advanced_frame, "pairlists/cycle", self.pairlists_cycle_var, 1, 2, 70)
+        self._small_field(self.advanced_frame, "margin", self.margin_var, 1, 4, 70)
+        self._small_menu(self.advanced_frame, "exclude", self.exclude_var,
                          ["scaled1-4", "1-4", "none"], 2, 0, 110)
-        self._small_field(advanced, "1-4 scaling", self.scaling_var, 2, 2, 70)
-        self._small_menu(advanced, "CUDASOAintegrate", self.cuda_soa_var,
+        self._small_field(self.advanced_frame, "1-4 scaling", self.scaling_var, 2, 2, 70)
+        self._small_menu(self.advanced_frame, "CUDASOAintegrate", self.cuda_soa_var,
                          ["auto", "on", "off"], 2, 4, 90)
-        self._small_menu(advanced, "DeviceMigration", self.device_migration_var,
+        self._small_menu(self.advanced_frame, "DeviceMigration", self.device_migration_var,
                          ["off", "on"], 3, 0, 80)
-        checks = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
-        checks.grid(row=row, column=0, columnspan=4, sticky="ew", padx=8, pady=(2, 0))
+        self.advanced_checks_frame = ctk.CTkFrame(scroll, fg_color="transparent", height=1)
+        self.advanced_checks_frame.grid(row=row, column=0, columnspan=4, sticky="ew", padx=8, pady=(2, 0))
         row += 1
         for index, (text, var) in enumerate([
             ("switching", self.switching_var),
@@ -207,8 +216,10 @@ class SimulatePanel(ctk.CTkFrame):
             ("binary output", self.binary_output_var),
             ("binary restart", self.binary_restart_var),
         ]):
-            ctk.CTkCheckBox(checks, text=text, variable=var).grid(
+            ctk.CTkCheckBox(self.advanced_checks_frame, text=text, variable=var).grid(
                 row=index // 4, column=index % 4, sticky="w", padx=5, pady=2)
+        self._advanced_visible = False
+        self._set_advanced_visible(False)
 
         ctk.CTkLabel(scroll, text="Pipeline", font=ctk.CTkFont(weight="bold")).grid(
             row=row, column=0, columnspan=4, sticky="w", padx=8, pady=(12, 2))
@@ -284,6 +295,20 @@ class SimulatePanel(ctk.CTkFrame):
         ctk.CTkLabel(parent, text=label, text_color="gray").grid(row=row, column=col, sticky="w", padx=4, pady=3)
         ctk.CTkOptionMenu(parent, variable=var, values=values, width=width).grid(
             row=row, column=col + 1, sticky="w", padx=4, pady=3)
+
+    def _toggle_advanced_settings(self):
+        self._set_advanced_visible(not getattr(self, "_advanced_visible", False))
+
+    def _set_advanced_visible(self, visible: bool):
+        self._advanced_visible = visible
+        if visible:
+            self.advanced_frame.grid()
+            self.advanced_checks_frame.grid()
+            self.advanced_toggle_btn.configure(text="Hide")
+        else:
+            self.advanced_frame.grid_remove()
+            self.advanced_checks_frame.grid_remove()
+            self.advanced_toggle_btn.configure(text="Show")
 
     def _populate_stages(self):
         for widget in self.stages_frame.winfo_children():
@@ -466,13 +491,17 @@ class SimulatePanel(ctk.CTkFrame):
         self.psf_var.set(data.get("psf", ""))
         self.pdb_var.set(data.get("pdb", ""))
         self.cell_var.set(data.get("cell", ""))
-        self.package_var.set(os.path.join(data.get("outdir", ""), "namd"))
+        outdir = data.get("outdir", "") or os.path.dirname(data.get("pdb", ""))
+        self.outdir_var.set(outdir)
+        self.package_var.set(os.path.join(outdir, "namd") if outdir else "")
         self.start_mode_var.set("initial")
         self.restart_prefix_var.set("")
         params = data.get("parameters")
         if params:
             self.parameter_files = list(params)
             self.params_label.configure(text=self._params_text())
+        self._update_package_default()
+        self._analyze_system()
         self._refresh_timeline()
 
     def _load_from_build(self):

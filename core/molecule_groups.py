@@ -1,20 +1,8 @@
 import os
 from dataclasses import dataclass, field
 
-PROTEIN_RESNAMES = frozenset({
-    'ALA', 'ARG', 'ASN', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'HIS', 'ILE',
-    'LEU', 'LYS', 'MET', 'PHE', 'PRO', 'SER', 'THR', 'TRP', 'TYR', 'VAL',
-    'HID', 'HIE', 'HIP', 'HSD', 'HSE', 'HSP', 'MSE', 'CYX', 'CYM',
-})
-
-WATER_RESNAMES = frozenset({'HOH', 'WAT', 'TIP3', 'SOL', 'H2O', 'TIP'})
-
-METAL_RESNAMES = frozenset({
-    'ZN', 'MG', 'CA', 'FE', 'MN', 'NA', 'K', 'CU', 'NI', 'CO',
-    'HG', 'CD', 'PB', 'PT', 'AU', 'AG', 'SR', 'BA', 'CS', 'RB',
-    'LI', 'BE', 'AL', 'CR', 'FE2', 'FE3', 'CU1', 'IOD', 'CLA',
-    'POT', 'SOD', 'CAL', 'MN3',
-})
+from core.charmm import METAL_RESNAMES, PROTEIN_RESNAMES, WATER_RESNAMES
+from core import pdb_fields as pdbf
 
 TYPE_ORDER  = {'protein': 0, 'ligand': 1, 'metal': 2, 'water': 3, 'other': 4}
 TYPE_COLORS = {
@@ -74,9 +62,9 @@ def find_chains(pdb_file: str) -> list[str]:
     seen: set[str] = set()
     with open(pdb_file) as f:
         for line in f:
-            if line[:6].strip() not in ('ATOM', 'HETATM'):
+            if not pdbf.is_atom_record(line):
                 continue
-            chain = line[21].strip() if len(line) > 21 else ''
+            chain = pdbf.chain_id(line)
             if chain and chain not in seen:
                 seen.add(chain)
                 chains.append(chain)
@@ -101,7 +89,7 @@ def _line_models(lines) -> list[int]:
     mapping = []
     cur = 0
     for line in lines:
-        rec = line[:6].strip()
+        rec = pdbf.record_name(line)
         if rec == 'MODEL':
             try:
                 cur = int(line[10:14])
@@ -125,14 +113,14 @@ def parse_groups(pdb_file: str, allowed_models: set | None = None) -> list[MolGr
     line_model = _line_models(lines)
 
     for idx, line in enumerate(lines):
-        rec = line[:6].strip()
+        rec = pdbf.record_name(line)
         if rec not in ('ATOM', 'HETATM'):
             continue
         if allowed_models is not None and line_model[idx] not in allowed_models:
             continue
 
-        chain   = line[21].strip() if len(line) > 21 else ''
-        resname = line[17:20].strip() if len(line) > 19 else ''
+        chain = pdbf.chain_id(line)
+        resname = pdbf.resname(line)
 
         # Classify by residue name, not ATOM/HETATM record type — MD-frame PDBs
         # often write everything as ATOM, losing the HETATM distinction.
@@ -160,8 +148,7 @@ def parse_groups(pdb_file: str, allowed_models: set | None = None) -> list[MolGr
         g.resnames.add(resname)
         if chain:
             g.chains.add(chain)
-        resid = line[22:26].strip() if len(line) > 25 else ''
-        group_residues.setdefault(key, set()).add((resid, line[26] if len(line) > 26 else ''))
+        group_residues.setdefault(key, set()).add((pdbf.resid(line), pdbf.icode(line)))
 
     # A "protein" chain with a single residue is almost certainly a cap or a
     # ligand, not a protein — reclassify it as a ligand.
@@ -185,17 +172,17 @@ def find_altlocs(pdb_file: str) -> list[AltLocResidue]:
         lines = f.readlines()
 
     for idx, line in enumerate(lines):
-        rec = line[:6].strip()
+        rec = pdbf.record_name(line)
         if rec not in ('ATOM', 'HETATM'):
             continue
-        altloc = line[16] if len(line) > 16 else ' '
+        altloc = pdbf.altloc(line)
         if not altloc.strip():
             continue
 
-        chain   = line[21].strip() if len(line) > 21 else ''
-        resid   = line[22:26].strip() if len(line) > 25 else ''
-        icode   = line[26].strip() if len(line) > 26 else ''
-        resname = line[17:20].strip() if len(line) > 19 else ''
+        chain = pdbf.chain_id(line)
+        resid = pdbf.resid(line)
+        icode = pdbf.icode(line)
+        resname = pdbf.resname(line)
         key = (chain, resid, icode)
 
         try:
@@ -221,47 +208,43 @@ def find_altlocs(pdb_file: str) -> list[AltLocResidue]:
 
 
 def _atom_xyz(line: str):
-    try:
-        return (float(line[30:38]), float(line[38:46]), float(line[46:54]))
-    except ValueError:
-        return None
+    return pdbf.xyz(line)
 
 
 def build_focus_scene_pdb(pdb_file: str, residue: AltLocResidue,
                           radius: float = 5.0) -> tuple[str, list[tuple]]:
-    """Build a self-contained PDB for the focus view: the residue's conformers
-    plus every residue with an atom within `radius` of it. Everything lives in
-    one model so the viewer can infer local bonding by distance.
+    """Build a compact PDB with altLoc conformers and nearby context.
 
-    Conformer atoms are moved onto private numeric chains ('0' = common/backbone,
-    '1','2',… = each altLoc code); environment atoms keep their original chain.
-    altLoc is blanked everywhere so no conformer is dropped.
+    Each conformer is moved onto a private numeric chain ('1','2',...), and
+    atoms without an altLoc are copied into every conformer. AltLoc is blanked so
+    VMD does not drop conformers. Nearby residues are included once to preserve
+    visual context without loading the whole structure.
 
     Returns (pdb_text, [(code, chain), …]) mapping each altLoc code to its chain.
     """
     key = residue.key()
     conf_chain = {code: str(i + 1) for i, code in enumerate(residue.codes)}
 
-    # parse all coordinate atoms once
-    atoms = []   # (line, key, altloc, xyz, is_residue)
+    atoms = []
+    residue_atoms = []
     with open(pdb_file) as f:
         for line in f:
-            if line[:6].strip() not in ('ATOM', 'HETATM'):
+            if not pdbf.is_atom_record(line):
                 continue
             xyz = _atom_xyz(line)
             if xyz is None:
                 continue
             k = _altloc_key_from_line(line)
-            altloc = line[16] if len(line) > 16 else ' '
-            atoms.append((line, k, altloc, xyz, k == key))
+            altloc = pdbf.altloc(line)
+            atoms.append((line, k, altloc, xyz))
+            if k == key:
+                residue_atoms.append((line, altloc, xyz))
 
-    res_coords = [a[3] for a in atoms if a[4]]
+    res_coords = [xyz for _, _, xyz in residue_atoms]
     r2 = radius * radius
-
-    # find environment residues (any atom within radius of the residue)
     env_keys = set()
-    for line, k, altloc, (x, y, z), is_res in atoms:
-        if is_res or k in env_keys:
+    for _line, k, altloc, (x, y, z) in atoms:
+        if k == key or k in env_keys:
             continue
         for rx, ry, rz in res_coords:
             dx, dy, dz = x - rx, y - ry, z - rz
@@ -270,39 +253,82 @@ def build_focus_scene_pdb(pdb_file: str, residue: AltLocResidue,
                 break
 
     out = []
-    # residue conformers → private chains, altLoc blanked
-    for line, k, altloc, xyz, is_res in atoms:
-        if not is_res:
-            continue
-        ch = conf_chain[altloc] if altloc.strip() else '0'
-        out.append(line[:16] + ' ' + line[17:21] + ch + line[22:])
+    for code, chain in conf_chain.items():
+        for line, altloc, _xyz in residue_atoms:
+            if altloc.strip() and altloc != code:
+                continue
+            out.append(line[:16] + ' ' + line[17:21] + chain + line[22:])
 
-    # environment → original chain, single conformer (blank/'A'), altLoc blanked
-    for line, k, altloc, xyz, is_res in atoms:
-        if is_res or k not in env_keys:
+    for line, k, altloc, _xyz in atoms:
+        if k not in env_keys:
             continue
-        if altloc.strip() and altloc != 'A':
+        if altloc.strip() and altloc != residue.codes[0]:
             continue
         out.append(line[:16] + ' ' + line[17:])
 
-    return ''.join(out), [(c, conf_chain[c]) for c in residue.codes]
+    return _renumber_pdb_atoms(out), [(c, conf_chain[c]) for c in residue.codes]
+
+
+def build_residue_focus_scene_pdb(pdb_file: str, chain: str, resid: str,
+                                  radius: float = 5.0) -> str:
+    """Build a small PDB containing a residue and nearby context."""
+    target_key = None
+    atoms = []
+    with open(pdb_file) as f:
+        for line in f:
+            if not pdbf.is_atom_record(line):
+                continue
+            xyz = _atom_xyz(line)
+            if xyz is None:
+                continue
+            k = _altloc_key_from_line(line)
+            altloc = pdbf.altloc(line)
+            if altloc.strip() and altloc != 'A':
+                continue
+            atoms.append((line[:16] + ' ' + line[17:], k, xyz))
+            if k[0] == chain and k[1] == resid:
+                target_key = k
+
+    if target_key is None:
+        return ""
+
+    target_coords = [xyz for _line, k, xyz in atoms if k == target_key]
+    r2 = radius * radius
+    keep_keys = {target_key}
+    for _line, k, (x, y, z) in atoms:
+        if k in keep_keys:
+            continue
+        for rx, ry, rz in target_coords:
+            dx, dy, dz = x - rx, y - ry, z - rz
+            if dx * dx + dy * dy + dz * dz <= r2:
+                keep_keys.add(k)
+                break
+
+    return _renumber_pdb_atoms([line for line, k, _xyz in atoms if k in keep_keys])
 
 
 def _altloc_key_from_line(line: str) -> tuple:
-    chain = line[21].strip() if len(line) > 21 else ''
-    resid = line[22:26].strip() if len(line) > 25 else ''
-    icode = line[26].strip() if len(line) > 26 else ''
-    return (chain, resid, icode)
+    return (pdbf.chain_id(line), pdbf.resid(line), pdbf.icode(line))
 
 
 def _set_serial(line: str, serial: int) -> str:
     """Write a sequential serial into columns 7-11."""
-    return line[:6] + f'{serial:>5}' + line[11:]
+    return pdbf.set_serial(line, serial)
+
+
+def _renumber_pdb_atoms(lines: list[str]) -> str:
+    out = []
+    for serial, line in enumerate(lines, start=1):
+        out.append(_set_serial(line, serial))
+    if out and not out[-1].endswith('\n'):
+        out[-1] += '\n'
+    out.append('END\n')
+    return ''.join(out)
 
 
 def _set_chain(line: str, chain: str) -> str:
     """Write a chain id into column 22."""
-    return line[:21] + (chain[:1] if chain else ' ') + line[22:]
+    return pdbf.set_chain(line, chain)
 
 
 def save_selected_groups(
@@ -348,7 +374,7 @@ def save_selected_groups(
     serial = 0
     with open(output_path, 'w') as out:
         for i, line in enumerate(all_lines):
-            rec = line[:6].strip()
+            rec = pdbf.record_name(line)
             if rec in ('MODEL', 'ENDMDL', 'NUMMDL'):
                 continue   # collapse to a single model
             if rec not in ('ATOM', 'HETATM'):
@@ -359,12 +385,12 @@ def save_selected_groups(
             if allowed_models is not None and line_model[i] not in allowed_models:
                 continue
 
-            altloc = line[16] if len(line) > 16 else ' '
+            altloc = pdbf.altloc(line)
             if altloc.strip():
                 chosen = altloc_choices.get(_altloc_key_from_line(line))
                 if chosen is not None and altloc != chosen:
                     continue   # drop the non-chosen conformer
-                line = line[:16] + ' ' + line[17:]   # blank the altLoc column
+                line = pdbf.blank_altloc(line)
 
             if i in idx_to_chain:
                 line = _set_chain(line, idx_to_chain[i])
@@ -391,9 +417,9 @@ def write_group_pdb(pdb_file: str, group: MolGroup, output_path: str,
     with open(output_path, 'w') as out:
         for i in sorted(wanted):
             line = all_lines[i]
-            altloc = line[16] if len(line) > 16 else ' '
+            altloc = pdbf.altloc(line)
             if altloc.strip():
-                line = line[:16] + ' ' + line[17:]   # keep all, blank altLoc col
+                line = pdbf.blank_altloc(line)
             if renumber:
                 serial += 1
                 line = _set_serial(line, serial)

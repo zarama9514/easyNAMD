@@ -8,8 +8,18 @@ from core.molecule_groups import MolGroup
 
 
 WATER_SELECTION = "water or resname HOH WAT TIP3 SOL H2O TIP"
-CARBON_SELECTION = "element C"
+PROTEIN_CARBON_NAMES = "C CA CB CG CG1 CG2 CD CD1 CD2 CE CE1 CE2 CE3 CZ CZ2 CZ3 CH2"
+CARBON_SELECTION = f"(element C) or (name {PROTEIN_CARBON_NAMES})"
+HEAVY_SELECTION = "not hydrogen"
 CARBON_GREEN_COLOR_ID = 7
+ALTLOC_CARBON_COLOR_IDS = {
+    "A": 1,  # red
+    "B": 0,  # blue
+    "C": 3,  # orange
+    "D": 4,  # yellow
+    "E": 11, # purple
+    "F": 10, # cyan
+}
 
 
 class VMDViewerController:
@@ -57,6 +67,22 @@ class VMDViewerController:
         with open(pdb_path, "w") as f:
             f.write(focus_pdb_text)
         script = _altloc_focus_script(pdb_path, title, alt_codes)
+        return self._send(vmd_path, script)
+
+    def show_pdb_focus(
+        self,
+        vmd_path: str,
+        focus_pdb_text: str,
+        title: str,
+        target_chain: str,
+        target_resid: str,
+    ) -> subprocess.Popen:
+        self._ensure_process(vmd_path)
+        assert self._tmp_dir is not None
+        pdb_path = os.path.join(self._tmp_dir, "residue_focus.pdb")
+        with open(pdb_path, "w") as f:
+            f.write(focus_pdb_text)
+        script = _small_residue_focus_script(pdb_path, title, target_chain, target_resid)
         return self._send(vmd_path, script)
 
     def is_open(self) -> bool:
@@ -127,7 +153,7 @@ def launch_altloc_focus_view(
 
 def _group_view_script(pdb_path: str, groups: list[MolGroup], selected_ids: set[str]) -> str:
     reps: list[str] = []
-    reps.extend(_add_atom_reps("all", "Lines 0.45"))
+    reps.extend(_add_atom_reps(_and_selection(["all", HEAVY_SELECTION]), "Licorice 0.06 6.0 6.0"))
     for group in groups:
         if group.group_id not in selected_ids:
             continue
@@ -149,13 +175,12 @@ def _residue_focus_script(pdb_path: str, chain: str, resid: str, title: str) -> 
     res_sel = _and_selection([_chain_selection(chain), f"resid {resid}"])
     env_sel = f"same residue as within 5 of ({res_sel})"
     reps = []
-    reps.extend(_add_atom_reps("all", "Lines 0.35"))
+    reps.extend(_add_atom_reps(_and_selection(["all", HEAVY_SELECTION]), "Licorice 0.05 6.0 6.0"))
     reps.extend(_add_atom_reps(env_sel, "Licorice 0.12 8.0 8.0"))
     reps.extend(_add_atom_reps(res_sel, "Licorice 0.28 16.0 16.0"))
     return (
         _script_header(pdb_path, f"easyNAMD {title}")
         + "\n".join(reps)
-        + f"\nset sel [atomselect top {{{res_sel}}}]\n$sel frame 0\nmolinfo top set center [measure center $sel]\n$sel delete\n"
         + _script_footer()
     )
 
@@ -163,15 +188,29 @@ def _residue_focus_script(pdb_path: str, chain: str, resid: str, title: str) -> 
 def _altloc_focus_script(pdb_path: str, title: str, alt_codes: list[str] | None = None) -> str:
     alt_codes = alt_codes or list("ABCDEFGHI")
     reps = []
-    reps.extend(_add_atom_reps("all", "Lines 0.35"))
-    reps.extend(_add_atom_reps("not chain 1 2 3 4 5 6 7 8 9", "Licorice 0.12 8.0 8.0"))
+    alt_chains = " ".join(str(i) for i in range(1, len(alt_codes) + 1))
+    context_sel = _and_selection([f"not chain {alt_chains}", HEAVY_SELECTION])
+    reps.extend(_add_atom_reps(context_sel, "Licorice 0.06 6.0 6.0"))
     for i, code in enumerate(alt_codes, start=1):
-        selection = f"chain {i}"
+        selection = _and_selection([f"chain {i}", HEAVY_SELECTION])
         reps.append(_add_rep(_and_selection([selection, f"not ({CARBON_SELECTION})"]),
-                             "Licorice 0.28 16.0 16.0", "Name"))
+                             "Licorice 0.22 14.0 14.0", "Name"))
         reps.append(_add_rep(_and_selection([selection, CARBON_SELECTION]),
-                             "Licorice 0.28 16.0 16.0", f"ColorID {_alt_color_id(code)}"))
+                             "Licorice 0.22 14.0 14.0", f"ColorID {_alt_carbon_color_id(code)}"))
     return _script_header(pdb_path, f"easyNAMD {title}") + "\n".join(reps) + _script_footer()
+
+
+def _small_residue_focus_script(pdb_path: str, title: str, chain: str, resid: str) -> str:
+    res_sel = _and_selection([_chain_selection(chain), f"resid {resid}", HEAVY_SELECTION])
+    env_sel = _and_selection([f"not ({res_sel})", HEAVY_SELECTION])
+    reps = []
+    reps.extend(_add_atom_reps(env_sel, "Licorice 0.06 6.0 6.0"))
+    reps.extend(_add_atom_reps(res_sel, "Licorice 0.24 14.0 14.0"))
+    return (
+        _script_header(pdb_path, f"easyNAMD {title}")
+        + "\n".join(reps)
+        + _script_footer()
+    )
 
 
 def _script_header(pdb_path: str, title: str) -> str:
@@ -181,7 +220,6 @@ display projection Orthographic
 display depthcue off
 axes location Off
 color Display Background white
-color Name C green
 mol new [list {{{_tcl_text(pdb_path)}}}] type pdb waitfor all
 mol delrep 0 top
 catch {{wm title . {{{_tcl_text(title)}}}}}
@@ -191,29 +229,33 @@ catch {{wm title . {{{_tcl_text(title)}}}}}
 def _script_footer() -> str:
     return """
 mol selection all
-mol representation Lines
+mol representation Licorice 0.06 6.0 6.0
 mol color Name
 mol material Opaque
 display resetview
 """
 
 
-def _add_rep(selection: str, representation: str, color: str) -> str:
+def _add_rep(selection: str, representation: str, color: str, material: str = "Opaque") -> str:
     return f"""\
 mol selection {{{_tcl_text(selection)}}}
 mol representation {representation}
 mol color {color}
-mol material Opaque
+mol material {material}
 mol addrep top
 """
 
 
-def _add_atom_reps(selection: str, representation: str) -> list[str]:
+def _add_atom_reps(
+    selection: str,
+    representation: str,
+    carbon_color: int = CARBON_GREEN_COLOR_ID,
+) -> list[str]:
     noncarbon = _and_selection([selection, f"not ({CARBON_SELECTION})"])
     carbon = _and_selection([selection, CARBON_SELECTION])
     return [
         _add_rep(noncarbon, representation, "Name"),
-        _add_rep(carbon, representation, f"ColorID {CARBON_GREEN_COLOR_ID}"),
+        _add_rep(carbon, representation, f"ColorID {carbon_color}"),
     ]
 
 
@@ -236,10 +278,11 @@ def _and_selection(parts: list[str]) -> str:
     return " and ".join(f"({part})" for part in parts if part)
 
 
-def _alt_color_id(code: str) -> int:
-    if code and code[0].isalpha():
-        return ord(code[0].upper()) - ord("A")
-    return 0
+def _alt_carbon_color_id(code: str) -> int:
+    if not code:
+        return ALTLOC_CARBON_COLOR_IDS["A"]
+    code = code[0].upper()
+    return ALTLOC_CARBON_COLOR_IDS.get(code, (ord(code) - ord("A")) % 32)
 
 
 def _tcl_text(value: str) -> str:

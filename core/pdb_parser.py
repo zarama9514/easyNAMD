@@ -1,5 +1,8 @@
 from dataclasses import dataclass, field
 
+from core.charmm import PROTEIN_RESNAMES, WATER_RESNAMES
+from core import pdb_fields as pdbf
+
 
 # ------------------------------------------------------------------ #
 #  Data classes                                                        #
@@ -86,24 +89,16 @@ class PDBInfo:
 #  Parsers                                                             #
 # ------------------------------------------------------------------ #
 
-_STANDARD_AA = {
-    "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
-    "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
-    "HID", "HIE", "HIP", "HSD", "HSE", "HSP", "MSE",
-}
-_WATER = {"HOH", "WAT", "TIP3", "SOL", "H2O", "TIP"}
-
-
 def find_hetero_residues(pdb_file: str) -> list[HeteroResidue]:
     """Find non-protein, non-water residue types (ligands, ions)."""
     found: dict[tuple, HeteroResidue] = {}
     with open(pdb_file) as f:
         for line in f:
-            if line[:6].strip() not in ("ATOM", "HETATM"):
+            if not pdbf.is_atom_record(line):
                 continue
-            resname = line[17:20].strip()
-            chain   = line[21].strip() if len(line) > 21 else ""
-            if resname in _STANDARD_AA or resname in _WATER:
+            resname = pdbf.resname(line)
+            chain = pdbf.chain_id(line)
+            if resname in PROTEIN_RESNAMES or resname in WATER_RESNAMES:
                 continue
             key = (resname, chain)
             if key not in found:
@@ -118,17 +113,14 @@ def find_disulfides_by_distance(pdb_file: str, cutoff: float = 2.5) -> list[SSBo
     sgs = []   # (chain, resid, xyz)
     with open(pdb_file) as f:
         for line in f:
-            if line[:6].strip() not in ("ATOM", "HETATM"):
+            if not pdbf.is_atom_record(line):
                 continue
-            if line[17:20].strip() != "CYS" or line[12:16].strip() != "SG":
+            if pdbf.resname(line) != "CYS" or pdbf.atom_name(line) != "SG":
                 continue
-            try:
-                xyz = (float(line[30:38]), float(line[38:46]), float(line[46:54]))
-            except ValueError:
+            xyz = pdbf.xyz(line)
+            if xyz is None:
                 continue
-            chain = line[21].strip() if len(line) > 21 else ""
-            resid = line[22:26].strip() if len(line) > 25 else ""
-            sgs.append((chain, resid, xyz))
+            sgs.append((pdbf.chain_id(line), pdbf.resid(line), xyz))
 
     bonds = []
     c2 = cutoff ** 2
@@ -164,7 +156,7 @@ def parse_pdb(pdb_file: str) -> PDBInfo:
 
     with open(pdb_file) as f:
         for line in f:
-            record = line[:6].strip()
+            record = pdbf.record_name(line)
 
             # REMARK 465 = missing residues, REMARK 470 = missing atoms.
             # Count only data rows (those whose 3-letter resname slot is filled
@@ -181,27 +173,27 @@ def parse_pdb(pdb_file: str) -> PDBInfo:
                 continue
 
             if record in ("ATOM", "HETATM"):
-                chain  = line[21]   if len(line) > 21 else " "
-                resid  = line[22:26].strip() if len(line) > 25 else ""
-                resname = line[17:20].strip() if len(line) > 19 else ""
-                altloc = line[16]   if len(line) > 16 else " "
-                icode  = line[26]   if len(line) > 26 else " "
+                chain = pdbf.chain_id(line)
+                resid = pdbf.resid(line)
+                resname = pdbf.resname(line)
+                altloc = pdbf.altloc(line)
+                icode = pdbf.icode(line)
 
                 # protein chains for segment building — classify by residue name
                 # (MD-frame PDBs write everything as ATOM, so record type is
                 # unreliable; only standard amino acids count as protein)
-                if resname in _STANDARD_AA and chain.strip():
+                if resname in PROTEIN_RESNAMES and chain.strip():
                     if chain not in seen_chains:
                         seen_chains.add(chain)
                         chains.append(chain)
                     chain_residues.setdefault(chain, set()).add((resid, icode))
 
                 # residue-numbering gaps within a chain (CA atoms only)
-                if record == "ATOM" and line[12:16].strip() == "CA" and resid.lstrip("-").isdigit():
+                if record == "ATOM" and pdbf.atom_name(line) == "CA" and resid.lstrip("-").isdigit():
                     n = int(resid)
                     prev = last_ca.get(chain)
                     if prev is not None and n - prev > 1:
-                        chain_gaps.append(f"{chain.strip()}: {prev}→{n} ({n - prev - 1} missing)")
+                        chain_gaps.append(f"{chain}: {prev}→{n} ({n - prev - 1} missing)")
                     last_ca[chain] = n
 
                 # altloc
@@ -217,7 +209,7 @@ def parse_pdb(pdb_file: str) -> PDBInfo:
                     key = (chain, resid)
                     if key not in seen_his:
                         seen_his.add(key)
-                        histidines.append(HisResidue(chain=chain.strip(), resid=resid))
+                        histidines.append(HisResidue(chain=chain, resid=resid))
 
             elif record == "SSBOND":
                 try:
