@@ -24,13 +24,28 @@ HIS_CUTOFF = 3.0   # Å, metal–N
 class ZnCys:
     chain: str
     resid: str
+    metal: str = ""            # coordinating metal resname, e.g. ZN / CD
+    metal_resid: str = ""
+    distance: float = 0.0      # Å, SG–metal
+
+    def describe(self) -> str:
+        return (f"CYS {self.chain}:{self.resid} SG — {self.metal} {self.metal_resid}"
+                f"  {self.distance:.2f} Å")
 
 
 @dataclass
 class ZnHis:
     chain: str
     resid: str
-    protonation: str   # HSD or HSE
+    protonation: str           # HSD or HSE
+    metal: str = ""
+    metal_resid: str = ""
+    coordinating_atom: str = ""   # ND1 or NE2 — the one bound to the metal
+    distance: float = 0.0         # Å, coordinating N–metal
+
+    def describe(self) -> str:
+        return (f"HIS {self.chain}:{self.resid} {self.coordinating_atom} — "
+                f"{self.metal} {self.metal_resid}  {self.distance:.2f} Å → {self.protonation}")
 
 
 def _dist2(a, b):
@@ -41,9 +56,22 @@ def _xyz(line):
     return pdbf.xyz(line)
 
 
+def _closest_metal(point, metals):
+    """Return (squared_distance, metal) for the metal nearest to `point`."""
+    best_d2, best_metal = None, None
+    for metal in metals:
+        d2 = _dist2(point, metal[0])
+        if best_d2 is None or d2 < best_d2:
+            best_d2, best_metal = d2, metal
+    return best_d2, best_metal
+
+
 def detect_zinc_coordination(pdb_file: str):
-    """Return (list[ZnCys], list[ZnHis]) for residues coordinating a zinc ion."""
-    zincs = []                          # [xyz]
+    """Return (list[ZnCys], list[ZnHis]) for residues coordinating a metal ion.
+
+    Distances and the coordinating metal are reported so the result can be
+    checked by eye — a wrong cutoff is otherwise a silent error."""
+    metals = []                         # [(xyz, resname, resid)]
     cys_sg = {}                         # (chain, resid) -> xyz of SG
     his_n  = {}                         # (chain, resid) -> {"ND1": xyz, "NE2": xyz}
 
@@ -60,44 +88,51 @@ def detect_zinc_coordination(pdb_file: str):
             resid = pdbf.resid(line)
 
             if resname in COORDINATING_METAL_RESNAMES:
-                zincs.append(xyz)
+                metals.append((xyz, resname, resid))
             elif resname == "CYS" and atom == "SG":
                 cys_sg[(chain, resid)] = xyz
             elif resname in ("HIS", "HID", "HIE", "HIP", "HSD", "HSE", "HSP") \
                     and atom in ("ND1", "NE2"):
                 his_n.setdefault((chain, resid), {})[atom] = xyz
 
-    if not zincs:
+    if not metals:
         return [], []
 
-    # cysteines whose SG is within cutoff of any zinc
+    # cysteines whose SG is within cutoff of any metal → thiolate (CYSD)
     cys_result = []
     c2 = CYS_CUTOFF ** 2
     for (chain, resid), sg in cys_sg.items():
-        if any(_dist2(sg, zn) <= c2 for zn in zincs):
-            cys_result.append(ZnCys(chain=chain, resid=resid))
+        d2, metal = _closest_metal(sg, metals)
+        if d2 is not None and d2 <= c2:
+            cys_result.append(ZnCys(
+                chain=chain, resid=resid,
+                metal=metal[1], metal_resid=metal[2], distance=d2 ** 0.5,
+            ))
 
-    # histidines coordinating a zinc → tautomer with proton on the far nitrogen
+    # histidines coordinating a metal → proton goes on the far nitrogen
     his_result = []
     h2 = HIS_CUTOFF ** 2
     for (chain, resid), ns in his_n.items():
-        nd1, ne2 = ns.get("ND1"), ns.get("NE2")
-        nearest_zn = None
-        best = None
-        for zn in zincs:
-            for n in (nd1, ne2):
-                if n is None:
-                    continue
-                d = _dist2(n, zn)
-                if best is None or d < best:
-                    best, nearest_zn = d, zn
-        if best is None or best > h2:
+        candidates = []
+        for name in ("ND1", "NE2"):
+            point = ns.get(name)
+            if point is None:
+                continue
+            d2, metal = _closest_metal(point, metals)
+            if d2 is not None:
+                candidates.append((d2, name, metal))
+        if not candidates:
             continue
-        # whichever N is closer to the zinc coordinates it (deprotonated);
-        # the proton goes on the other N
-        d_nd1 = min((_dist2(nd1, zn) for zn in zincs), default=1e9) if nd1 else 1e9
-        d_ne2 = min((_dist2(ne2, zn) for zn in zincs), default=1e9) if ne2 else 1e9
-        prot = "HSD" if d_ne2 < d_nd1 else "HSE"   # NE2 coordinates → HSD
-        his_result.append(ZnHis(chain=chain, resid=resid, protonation=prot))
+        best_d2, best_atom, best_metal = min(candidates)
+        if best_d2 > h2:
+            continue
+        # the nitrogen closer to the metal coordinates it (deprotonated);
+        # the proton sits on the other one
+        prot = "HSD" if best_atom == "NE2" else "HSE"
+        his_result.append(ZnHis(
+            chain=chain, resid=resid, protonation=prot,
+            metal=best_metal[1], metal_resid=best_metal[2],
+            coordinating_atom=best_atom, distance=best_d2 ** 0.5,
+        ))
 
     return cys_result, his_result
