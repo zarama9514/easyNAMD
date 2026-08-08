@@ -34,7 +34,7 @@ def quiet():
 class ParserTests(unittest.TestCase):
     def test_every_subcommand_builds_and_has_help(self):
         parser = build_parser()
-        for command in ("doctor", "inspect"):
+        for command in ("doctor", "inspect", "status"):
             with self.subTest(command=command):
                 # parse_args on --help raises SystemExit(0); anything else is a bug
                 with self.assertRaises(SystemExit) as ctx, quiet():
