@@ -3,7 +3,7 @@
 import argparse
 import sys
 
-from cli import doctor, inspect, status
+from cli import build, doctor, inspect, prepare, status, validate
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -14,7 +14,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     doctor.add_parser(subparsers)
     inspect.add_parser(subparsers)
+    prepare.add_parser(subparsers)
+    build.add_parser(subparsers)
     status.add_parser(subparsers)
+    validate.add_parser(subparsers)
     return parser
 
 

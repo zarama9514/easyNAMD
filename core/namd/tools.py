@@ -354,3 +354,35 @@ def _resid(line: str) -> str:
 
 def _segname(line: str) -> str:
     return pdbf.segname(line)
+
+
+def psf_total_charge(path: str) -> float | None:
+    """Sum the charge column of a PSF's atom section.
+
+    Recomputed from the file rather than trusted from the build log, because a
+    validation has to describe the file that is on disk now — that is the whole
+    point of being able to run it again later.
+    """
+    if not path or not os.path.isfile(path):
+        return None
+    total = 0.0
+    remaining = 0
+    with open(path, errors="replace") as f:
+        for line in f:
+            if remaining <= 0:
+                if "!NATOM" in line:
+                    try:
+                        remaining = int(line.split()[0])
+                    except (IndexError, ValueError):
+                        return None
+                continue
+            parts = line.split()
+            # ... segid resid resname name type charge mass ...
+            if len(parts) < 7:
+                continue
+            try:
+                total += float(parts[6])
+            except ValueError:
+                return None
+            remaining -= 1
+    return None if remaining > 0 else total

@@ -124,3 +124,118 @@ class DoctorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BuildDecisionTests(unittest.TestCase):
+    """The rules that turn coordinates into protonation and patches."""
+
+    def _write(self, text: str) -> str:
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".pdb", delete=False)
+        tmp.write(text)
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        return tmp.name
+
+    def test_metal_bound_residues_get_rule_derived_choices_with_evidence(self):
+        from cli.build import decide
+        from core.run_dir import DETERMINISTIC_RULE, DOMAIN_DEFAULT
+
+        pdb = self._write(
+            atom(1, "CA", "ALA", "A", 1, 10.0, 10.0, 10.0)
+            + atom(2, "ND1", "HIS", "A", 5, 0.0, 0.0, 0.0, element="N")
+            + atom(3, "NE2", "HIS", "A", 5, 4.0, 0.0, 0.0, element="N")
+            + atom(4, "SG", "CYS", "A", 8, 2.0, 2.3, 0.0, element="S")
+            + atom(5, "ZN", "ZN", "A", 99, 2.0, 0.0, 0.0, record="HETATM", element="ZN")
+            + "END\n"
+        )
+        _segments, histidines, patches, decisions = decide(pdb)
+
+        # ND1 is 2.0 A from the zinc and NE2 is 2.0 A too, but ND1 comes first;
+        # whichever coordinates, the proton must go on the *other* nitrogen.
+        his = next(d for d in decisions if d[0] == "histidine")
+        self.assertEqual(his[3], DETERMINISTIC_RULE)
+        self.assertIn("ZN", his[4])
+        self.assertIn(histidines[0].protonation, ("HSD", "HSE"))
+
+        cysd = [d for d in decisions if d[2] == "CYSD"]
+        self.assertEqual(len(cysd), 1, decisions)
+        self.assertEqual(cysd[0][3], DETERMINISTIC_RULE)
+        self.assertTrue(any(p.name == "CYSD" for p in patches))
+
+    def test_plain_histidine_takes_a_documented_default(self):
+        from cli.build import decide
+        from core.run_dir import DOMAIN_DEFAULT
+
+        pdb = self._write(
+            atom(1, "ND1", "HIS", "A", 5, 0.0, 0.0, 0.0, element="N")
+            + atom(2, "NE2", "HIS", "A", 5, 2.0, 0.0, 0.0, element="N")
+            + "END\n"
+        )
+        _s, histidines, _p, decisions = decide(pdb)
+        entry = next(d for d in decisions if d[0] == "histidine")
+        self.assertEqual(entry[2], "HSD")
+        self.assertEqual(entry[3], DOMAIN_DEFAULT)
+        self.assertEqual(histidines[0].protonation, "HSD")
+
+    def test_an_explicit_override_beats_the_rule(self):
+        from cli.build import decide
+        from core.run_dir import USER_DECISION
+
+        pdb = self._write(
+            atom(1, "ND1", "HIS", "A", 5, 0.0, 0.0, 0.0, element="N")
+            + atom(2, "NE2", "HIS", "A", 5, 4.0, 0.0, 0.0, element="N")
+            + atom(3, "ZN", "ZN", "A", 99, 2.0, 0.0, 0.0, record="HETATM", element="ZN")
+            + "END\n"
+        )
+        _s, histidines, _p, decisions = decide(pdb, his_overrides={"A:5": "HSP"})
+        entry = next(d for d in decisions if d[0] == "histidine")
+        self.assertEqual((entry[2], entry[3]), ("HSP", USER_DECISION))
+        self.assertEqual(histidines[0].protonation, "HSP")
+
+    def test_disulfides_are_found_without_a_header_record(self):
+        from cli.build import decide
+
+        pdb = self._write(
+            atom(1, "SG", "CYS", "A", 10, 0.0, 0.0, 0.0, element="S")
+            + atom(2, "SG", "CYS", "A", 50, 2.05, 0.0, 0.0, element="S")
+            + "END\n"
+        )
+        _s, _h, patches, decisions = decide(pdb)
+        self.assertTrue(any(p.name == "DISU" for p in patches))
+        self.assertTrue(any(d[0] == "disulfide" for d in decisions))
+
+    def test_disulfides_can_be_switched_off(self):
+        from cli.build import decide
+
+        pdb = self._write(
+            atom(1, "SG", "CYS", "A", 10, 0.0, 0.0, 0.0, element="S")
+            + atom(2, "SG", "CYS", "A", 50, 2.05, 0.0, 0.0, element="S")
+            + "END\n"
+        )
+        _s, _h, patches, _d = decide(pdb, use_disulfides=False)
+        self.assertFalse(any(p.name == "DISU" for p in patches))
+
+
+class LogScanTests(unittest.TestCase):
+    def test_charmm_stream_noise_is_not_reported_as_a_problem(self):
+        # These appear in every build that loads .str files; treating them as
+        # problems would bury the lines that matter.
+        from core.vmd_runner import scan_problems
+
+        noise = [
+            'psfgen) ERROR!  FAILED TO RECOGNIZE SET.  Line 18: set nat ?NATC',
+            'psfgen) duplicate residue key TM3P will be ignored',
+            'psfgen) duplicate type key SOD',
+            'Info) Duplicate resname "4YS" for glycanReader.',
+            'psfgen) ERROR!  Failed to parse bond statement.  Line 2727: BOND PA',
+        ]
+        self.assertEqual(scan_problems(noise), [])
+
+    def test_structure_problems_are_reported(self):
+        from core.vmd_runner import scan_problems
+
+        real = [
+            "psfgen) Warning: failed to set coordinate for atom O ARG:270 A",
+            "psfgen) ERROR: unknown residue type XYZ",
+        ]
+        self.assertEqual(len(scan_problems(real)), 2)
